@@ -201,7 +201,7 @@ class CryptoSignalBot:
         return Panel(table, style="blue")
 
     def create_gainers_panel(self) -> Panel:
-        """Updated gainers panel showing core conditions instead of all 8"""
+        """Updated gainers panel with better error handling for N/A values"""
         table = Table(title="Top 35 Gainers", box=box.SIMPLE)
         table.add_column("Coin", style="cyan", width=4)
         table.add_column("Price", style="white", width=7)
@@ -217,16 +217,33 @@ class CryptoSignalBot:
             symbol = gainer['symbol']
             data = self.current_data.get(symbol)
             
-            if data:
-                conditions = self.check_strategy_conditions(data)
-                core_conditions = ['bb_touch', 'rsi_oversold', 'macd_momentum', 'stoch_recovery', 'trend_alignment']
-                core_conditions_met = sum(conditions[cond] for cond in core_conditions)
-                volume_str = f"{data.volume/data.volume_avg:.1f}x" if data.volume_avg > 0 else "N/A"
-                rsi_str = f"{data.rsi_5m:.0f}" if hasattr(data, 'rsi_5m') else "N/A"
+            if data and isinstance(data, MarketData):  # Ensure data is valid and of correct type
+                try:
+                    conditions = self.check_strategy_conditions(data)
+                    core_conditions = ['bb_touch', 'rsi_oversold', 'macd_momentum', 'stoch_recovery', 'trend_alignment']
+                    core_conditions_met = sum(conditions[cond] for cond in core_conditions)
+                    
+                    # Better error handling for volume calculation
+                    if hasattr(data, 'volume') and hasattr(data, 'volume_avg') and data.volume_avg > 0:
+                        volume_str = f"{data.volume/data.volume_avg:.1f}x"
+                    else:
+                        volume_str = "Wait"  # Change "N/A" to "Wait" for clarity
+                    
+                    # Better error handling for RSI
+                    if hasattr(data, 'rsi_5m') and not pd.isna(data.rsi_5m):
+                        rsi_str = f"{data.rsi_5m:.0f}"
+                    else:
+                        rsi_str = "Wait"  # Change "N/A" to "Wait" for clarity
+                except Exception as e:
+                    # Handle any unexpected errors in condition checking
+                    self.log_message(f"Error processing {symbol}: {str(e)[:20]}", "error")
+                    core_conditions_met = 0
+                    volume_str = "Err"  # Error indicator
+                    rsi_str = "Err"  # Error indicator
             else:
                 core_conditions_met = 0
-                volume_str = "N/A"
-                rsi_str = "N/A"
+                volume_str = "Scan"  # Clearer indication that scan is pending
+                rsi_str = "Scan"  # Clearer indication that scan is pending
             
             change_style = "green" if gainer['change_24h'] > 0 else "red"
             conditions_style = "green" if core_conditions_met >= 4 else "yellow" if core_conditions_met >= 3 else "white"
@@ -593,7 +610,7 @@ class CryptoSignalBot:
             return []
 
     def get_binance_data(self, symbol=None, intervals=["5m", "15m", "1h", "1d"]):
-        """Fetch real-time data from Binance API"""
+        """Fetch real-time data from Binance API with better error handling"""
         base_url = "https://api.binance.com/api/v3/klines"
         data = {}
         
@@ -607,6 +624,9 @@ class CryptoSignalBot:
                 response = requests.get(base_url, params=params, timeout=10)
                 if response.status_code == 200:
                     klines = response.json()
+                    if len(klines) < 50:  # Ensure we have enough data
+                        continue
+                        
                     df = pd.DataFrame(klines, columns=[
                         'timestamp', 'open', 'high', 'low', 'close', 'volume',
                         'close_time', 'quote_asset_volume', 'number_of_trades',
@@ -618,12 +638,27 @@ class CryptoSignalBot:
                     })
                     data[interval] = df
             except Exception as e:
+                self.log_message(f"Error fetching {interval} data for {symbol}: {str(e)[:20]}", "error")
                 continue
-                
-        return data
     
+        return data
+
     def calculate_indicators(self, data: Dict[str, pd.DataFrame]) -> Optional[MarketData]:
-        """Calculate all technical indicators with new momentum and volatility indicators"""
+        """Calculate all indicators with robust error handling to prevent N/A values"""
+        required_intervals = ["5m", "15m", "1h", "1d"]
+        
+        # Check if we have all required intervals
+        if not all(interval in data for interval in required_intervals):
+            missing = [i for i in required_intervals if i not in data]
+            self.log_message(f"Missing intervals: {missing}", "warning")
+            return None
+            
+        # Check if dataframes have enough data
+        for interval in required_intervals:
+            if interval not in data or len(data[interval]) < 50:  # Fixed: Check if interval exists first
+                self.log_message(f"Not enough data for {interval}", "warning")
+                return None
+        
         try:
             current_price = float(data['5m']['close'].iloc[-1])
             
@@ -632,11 +667,21 @@ class CryptoSignalBot:
             rsi_15m = ta.momentum.RSIIndicator(data['15m']['close'], window=7).rsi().iloc[-1]
             rsi_1h = ta.momentum.RSIIndicator(data['1h']['close'], window=14).rsi().iloc[-1]
             
+            # Check for NaN values in critical indicators
+            if pd.isna(rsi_5m) or pd.isna(rsi_15m) or pd.isna(rsi_1h):
+                self.log_message(f"Invalid RSI values detected", "warning")
+                return None
+            
             # Enhanced Bollinger Bands
             bb_5m = ta.volatility.BollingerBands(data['5m']['close'], window=20, window_dev=2)
             bb_lower = bb_5m.bollinger_lband().iloc[-1]
             bb_upper = bb_5m.bollinger_hband().iloc[-1]
             bb_middle = bb_5m.bollinger_mavg().iloc[-1]
+            
+            # Check for NaN values in Bollinger bands
+            if pd.isna(bb_lower) or pd.isna(bb_upper) or pd.isna(bb_middle):
+                self.log_message(f"Invalid Bollinger Band values", "warning")
+                return None
             
             # EMA indicators
             ema_9_15m = ta.trend.EMAIndicator(data['15m']['close'], window=9).ema_indicator().iloc[-1]
@@ -644,24 +689,47 @@ class CryptoSignalBot:
             ema_20_15m = ta.trend.EMAIndicator(data['15m']['close'], window=20).ema_indicator().iloc[-1]
             ema_50_daily = ta.trend.EMAIndicator(data['1d']['close'], window=50).ema_indicator().iloc[-1]
             
+            # Check for NaN in EMAs
+            if pd.isna(ema_9_15m) or pd.isna(ema_21_15m) or pd.isna(ema_20_15m) or pd.isna(ema_50_daily):
+                self.log_message(f"Invalid EMA values", "warning")
+                return None
+            
             # NEW: MACD for momentum confirmation
             macd_indicator = ta.trend.MACD(data['5m']['close'], window_slow=26, window_fast=12, window_sign=9)
             macd_5m = macd_indicator.macd().iloc[-1]
             macd_signal_5m = macd_indicator.macd_signal().iloc[-1]
             macd_histogram_5m = macd_indicator.macd_diff().iloc[-1]
             
+            # Check for NaN in MACD
+            if pd.isna(macd_5m) or pd.isna(macd_signal_5m) or pd.isna(macd_histogram_5m):
+                self.log_message(f"Invalid MACD values", "warning")
+                return None
+            
             # NEW: Stochastic for oversold confirmation
             stoch_indicator = ta.momentum.StochasticOscillator(data['5m']['high'], data['5m']['low'], data['5m']['close'], window=14, smooth_window=3)
             stoch_k = stoch_indicator.stoch().iloc[-1]
             stoch_d = stoch_indicator.stoch_signal().iloc[-1]
             
+            # Check for NaN in stochastic
+            if pd.isna(stoch_k) or pd.isna(stoch_d):
+                self.log_message(f"Invalid Stochastic values", "warning")
+                return None
+            
             # NEW: ATR for volatility
             atr_indicator = ta.volatility.AverageTrueRange(data['5m']['high'], data['5m']['low'], data['5m']['close'], window=14)
             atr_5m = atr_indicator.average_true_range().iloc[-1]
             
-            # Volume analysis
+            if pd.isna(atr_5m):
+                self.log_message(f"Invalid ATR values", "warning")
+                return None
+            
+            # Volume analysis - prevent division by zero
             current_volume = float(data['5m']['volume'].iloc[-1])
             volume_avg = data['5m']['volume'].rolling(20).mean().iloc[-1]
+            
+            # Ensure volume_avg is not zero to prevent division errors
+            if pd.isna(volume_avg) or volume_avg <= 0:
+                volume_avg = 1.0  # Set to 1 to prevent division by zero
             
             # Support level
             weekly_support = data['1d']['low'].tail(7).min()
@@ -671,18 +739,28 @@ class CryptoSignalBot:
             btc_trend = "UP" if price_vs_ema50 > -2 else "DOWN"  # More lenient
             btc_strength = abs(price_vs_ema50)
             
-            # NEW: Volatility ratio for market regime
-            bb_width = (bb_upper - bb_lower) / bb_middle
+            # NEW: Volatility ratio for market regime with safeguards
+            bb_width = (bb_upper - bb_lower) / bb_middle if bb_middle > 0 else 0
             historical_bb_width = []
             for i in range(20):
                 try:
                     hist_bb = ta.volatility.BollingerBands(data['5m']['close'].iloc[-(20-i):], window=20, window_dev=2)
-                    hist_width = (hist_bb.bollinger_hband().iloc[-1] - hist_bb.bollinger_lband().iloc[-1]) / hist_bb.bollinger_mavg().iloc[-1]
-                    historical_bb_width.append(hist_width)
-                except:
+                    hist_upper = hist_bb.bollinger_hband().iloc[-1]
+                    hist_lower = hist_bb.bollinger_lband().iloc[-1]
+                    hist_middle = hist_bb.bollinger_mavg().iloc[-1]
+                    
+                    if not pd.isna(hist_upper) and not pd.isna(hist_lower) and not pd.isna(hist_middle) and hist_middle > 0:
+                        hist_width = (hist_upper - hist_lower) / hist_middle
+                        historical_bb_width.append(hist_width)
+                except Exception:
                     continue
-            
-            avg_bb_width = np.mean(historical_bb_width) if historical_bb_width else bb_width
+        
+            if len(historical_bb_width) > 0:
+                avg_bb_width = sum(historical_bb_width) / len(historical_bb_width)
+            else:
+                avg_bb_width = bb_width if bb_width > 0 else 1.0
+                
+            # Prevent division by zero with safeguard
             volatility_ratio = bb_width / avg_bb_width if avg_bb_width > 0 else 1.0
             
             return MarketData(
@@ -712,61 +790,150 @@ class CryptoSignalBot:
                 timestamp=datetime.now()
             )
         except Exception as e:
+            self.log_message(f"Error calculating indicators: {str(e)[:50]}", "error")
             return None
+
+    def get_order_book_imbalance(self, symbol: str) -> Optional[float]:
+        """Get order book imbalance ratio with better error handling"""
+        try:
+            url = "https://api.binance.com/api/v3/depth"
+            params = {'symbol': symbol, 'limit': 100}
+            response = requests.get(url, params=params, timeout=5)
+            
+            if response.status_code == 200:
+                depth_data = response.json()
+                
+                # Safety checks for empty order book
+                if not depth_data.get('bids') or not depth_data.get('asks'):
+                    return None
+                    
+                total_bid_volume = sum(float(bid[1]) for bid in depth_data['bids'])
+                total_ask_volume = sum(float(ask[1]) for ask in depth_data['asks'])
+                
+                if total_ask_volume > 0:
+                    return total_bid_volume / total_ask_volume
+                else:
+                    return 2.0  # Return a high value when there are no asks
+            return None
+        except Exception as e:
+            self.log_message(f"Order book error: {str(e)[:20]}", "error")
+            return None
+
+    def calculate_atr_levels(self, data: Dict[str, pd.DataFrame], entry_price: float) -> Dict[str, float]:
+        """Calculate ATR-based levels with safeguards for extreme values"""
+        try:
+            df_5m = data['5m'].copy()
+            
+            # Calculate True Range
+            df_5m['high_low'] = df_5m['high'] - df_5m['low']
+            df_5m['high_close_prev'] = abs(df_5m['high'] - df_5m['close'].shift(1))
+            df_5m['low_close_prev'] = abs(df_5m['low'] - df_5m['close'].shift(1))
+            df_5m['true_range'] = df_5m[['high_low', 'high_close_prev', 'low_close_prev']].max(axis=1)
+            
+            # Calculate ATR
+            atr_14 = df_5m['true_range'].rolling(window=14).mean().iloc[-1]
+            
+            # Add safeguards for extreme values
+            min_stop_percent = 0.7  # Minimum stop loss percentage
+            max_stop_percent = 2.5  # Maximum stop loss percentage
+            
+            # Calculate stop loss using ATR
+            stop_loss_raw = entry_price - (0.8 * atr_14)
+            stop_loss_percent = (entry_price - stop_loss_raw) / entry_price * 100
+            
+            # Ensure stop loss is within reasonable range
+            if stop_loss_percent < min_stop_percent:
+                stop_loss = entry_price * (1 - min_stop_percent/100)
+            elif stop_loss_percent > max_stop_percent:
+                stop_loss = entry_price * (1 - max_stop_percent/100)
+            else:
+                stop_loss = stop_loss_raw
+                
+            # Calculate reasonable TP levels
+            tp1 = entry_price + (1.0 * atr_14)
+            tp2 = entry_price + (1.8 * atr_14)
+            
+            return {
+                'atr': atr_14,
+                'stop_loss': stop_loss,
+                'tp1': tp1,
+                'tp2': tp2
+            }
+        except Exception as e:
+            self.log_message(f"ATR calculation error: {str(e)[:30]}", "warning")
+            # Default percentage-based levels if ATR calculation fails
+            return {
+                'atr': entry_price * 0.01,  # Estimate ATR as 1% of price
+                'stop_loss': entry_price * 0.985,  # 1.5% stop loss
+                'tp1': entry_price * 1.02,  # 2% TP1
+                'tp2': entry_price * 1.035   # 3.5% TP2
+            }
 
     def check_strategy_conditions(self, data: MarketData) -> Dict[str, bool]:
         """OPTIMIZED: Check only 5 CORE conditions with adaptive thresholds"""
-        conditions = {}
-        
-        # Adaptive thresholds based on volatility
-        high_vol = data.volatility_ratio > 1.2
-        bb_threshold = 1.015 if high_vol else 1.008  # More lenient in high volatility
-        rsi_threshold = 55 if high_vol else 50       # More lenient RSI in high volatility
-        
-        # CORE CONDITION 1: Bollinger Band Touch (ADAPTIVE)
-        bb_touch_threshold = data.bb_lower * bb_threshold
-        conditions['bb_touch'] = data.price <= bb_touch_threshold
-        
-        # CORE CONDITION 2: RSI Oversold but not extreme (ADAPTIVE)
-        conditions['rsi_oversold'] = data.rsi_5m < rsi_threshold and data.rsi_5m > 25
-        
-        # CORE CONDITION 3: MACD Momentum Building (FIXED)
-        # Check for MACD momentum - either rising histogram OR positive crossover
-        # Using "near zero and not deeply negative" is more reliable than just > -0.001
-        macd_near_crossover = data.macd_histogram_5m > -0.002 and data.macd_histogram_5m < 0.002
-        macd_positive_crossover = data.macd_5m > data.macd_signal_5m and data.macd_histogram_5m > 0
-        conditions['macd_momentum'] = macd_near_crossover or macd_positive_crossover
-        
-        # CORE CONDITION 4: Stochastic Oversold Recovery (FIXED FOR REAL)
-        # More forgiving conditions for < 40 stochastic values
-        # Deep oversold (below 20) - any sign of life is good
-        stoch_deep_oversold = data.stoch_k < 20 and (data.stoch_k >= data.stoch_d * 0.95)
-        
-        # Regular oversold (below 30) - allow more flexibility
-        stoch_oversold = data.stoch_k < 30 and (data.stoch_k >= data.stoch_d * 0.97 or data.stoch_k > data.stoch_k - 2)
-        
-        # Between 30-40 - recovery or at least not declining
-        stoch_low = data.stoch_k < 40 and data.stoch_k >= 30 and (data.stoch_k >= data.stoch_d * 0.99)
-        
-        # Stochastic momentum - either flattening or rising
-        stoch_rising = abs(data.stoch_k - data.stoch_d) < 3 and data.stoch_k < 40
-        
-        # Accept any of these conditions
-        conditions['stoch_recovery'] = stoch_deep_oversold or stoch_oversold or stoch_low or stoch_rising
-        
-        # CORE CONDITION 5: Trend Alignment (FIXED)
-        # Clearer check: Either price above/near EMA20 OR price showing strong recovery from support
-        near_ema = data.price > data.ema_20_15m * 0.996  # Price near or above EMA20
-        support_bounce = data.price > data.weekly_support * 1.01 and data.price < data.ema_20_15m * 0.99 and data.rsi_15m > 40
-        trend_ok = near_ema or support_bounce
-        conditions['trend_alignment'] = trend_ok
-        
-        # BONUS CONDITION 6: Volume Confirmation (OPTIONAL - not required)
-        # Either declining volume (accumulation) OR increasing volume (breakout)
-        volume_ratio = data.volume / data.volume_avg
-        conditions['volume_confirm'] = (volume_ratio < 0.8) or (volume_ratio > 1.3)
-        
-        return conditions
+        try:
+            conditions = {}
+            
+            # Adaptive thresholds based on volatility
+            high_vol = data.volatility_ratio > 1.2
+            bb_threshold = 1.015 if high_vol else 1.008  # More lenient in high volatility
+            rsi_threshold = 55 if high_vol else 50       # More lenient RSI in high volatility
+            
+            # CORE CONDITION 1: Bollinger Band Touch (ADAPTIVE)
+            bb_touch_threshold = data.bb_lower * bb_threshold
+            conditions['bb_touch'] = data.price <= bb_touch_threshold
+            
+            # CORE CONDITION 2: RSI Oversold but not extreme (ADAPTIVE)
+            conditions['rsi_oversold'] = data.rsi_5m < rsi_threshold and data.rsi_5m > 25
+            
+            # CORE CONDITION 3: MACD Momentum Building (FIXED)
+            # Check for MACD momentum - either rising histogram OR positive crossover
+            # Using "near zero and not deeply negative" is more reliable than just > -0.001
+            macd_near_crossover = data.macd_histogram_5m > -0.002 and data.macd_histogram_5m < 0.002
+            macd_positive_crossover = data.macd_5m > data.macd_signal_5m and data.macd_histogram_5m > 0
+            conditions['macd_momentum'] = macd_near_crossover or macd_positive_crossover
+            
+            # CORE CONDITION 4: Stochastic Oversold Recovery (FIXED FOR REAL)
+            # More forgiving conditions for < 40 stochastic values
+            # Deep oversold (below 20) - any sign of life is good
+            stoch_deep_oversold = data.stoch_k < 20 and (data.stoch_k >= data.stoch_d * 0.95)
+            
+            # Regular oversold (below 30) - allow more flexibility
+            # Fix the logic error: was comparing stoch_k with itself minus 2
+            stoch_oversold = data.stoch_k < 30 and (data.stoch_k >= data.stoch_d * 0.97 or data.stoch_k > data.stoch_d - 2)
+            
+            # Between 30-40 - recovery or at least not declining
+            stoch_low = data.stoch_k < 40 and data.stoch_k >= 30 and (data.stoch_k >= data.stoch_d * 0.99)
+            
+            # Stochastic momentum - either flattening or rising
+            stoch_rising = abs(data.stoch_k - data.stoch_d) < 3 and data.stoch_k < 40
+            
+            # Accept any of these conditions
+            conditions['stoch_recovery'] = stoch_deep_oversold or stoch_oversold or stoch_low or stoch_rising
+            
+            # CORE CONDITION 5: Trend Alignment (FIXED)
+            # Clearer check: Either price above/near EMA20 OR price showing strong recovery from support
+            near_ema = data.price > data.ema_20_15m * 0.996  # Price near or above EMA20
+            support_bounce = data.price > data.weekly_support * 1.01 and data.price < data.ema_20_15m * 0.99 and data.rsi_15m > 40
+            trend_ok = near_ema or support_bounce
+            conditions['trend_alignment'] = trend_ok
+            
+            # BONUS CONDITION 6: Volume Confirmation (OPTIONAL - not required)
+            # Either declining volume (accumulation) OR increasing volume (breakout)
+            volume_ratio = data.volume / data.volume_avg if data.volume_avg > 0 else 1.0  # Prevent division by zero
+            conditions['volume_confirm'] = (volume_ratio < 0.8) or (volume_ratio > 1.3)
+            
+            return conditions
+        except Exception as e:
+            self.log_message(f"Error in strategy conditions: {str(e)}", "error")
+            return {
+                'bb_touch': False, 
+                'rsi_oversold': False, 
+                'macd_momentum': False, 
+                'stoch_recovery': False,
+                'trend_alignment': False,
+                'volume_confirm': False
+            }
 
     def check_entry_signals(self, symbol: str, data: MarketData, conditions: Dict[str, bool]) -> Optional[Dict]:
         """OPTIMIZED: More lenient entry requirements"""
@@ -856,7 +1023,7 @@ class CryptoSignalBot:
         return signal
 
     def run_scanner(self):
-        """Main scanning loop - updated for 35 coins"""
+        """Main scanning loop with better error logging and recovery"""
         while self.running:
             try:
                 self.log_message("Fetching top 35 gainers...", "info")
@@ -873,12 +1040,13 @@ class CryptoSignalBot:
                 
                 signals_found = 0
                 scanned_count = 0
+                error_count = 0  # Track errors for logging
                 
                 # Don't clear all data, just mark as stale
                 for symbol in self.current_data.keys():
                     if symbol not in available_symbols:
                         self.current_data[symbol] = None
-                
+            
                 self.log_message(f"Starting scan of {len(available_symbols)} coins", "info")
                 
                 for i, symbol in enumerate(available_symbols):
@@ -890,12 +1058,16 @@ class CryptoSignalBot:
                         
                         market_data = self.get_binance_data(symbol)
                         if not market_data or '5m' not in market_data:
+                            self.log_message(f"No market data for {symbol}", "warning")
                             self.current_data[symbol] = None
+                            error_count += 1
                             continue
                             
                         current_data = self.calculate_indicators(market_data)
                         if not current_data:
+                            self.log_message(f"Failed to calculate indicators for {symbol}", "warning")
                             self.current_data[symbol] = None
+                            error_count += 1
                             continue
                         
                         self.current_data[symbol] = current_data
@@ -921,27 +1093,31 @@ class CryptoSignalBot:
                         time.sleep(0.2)
                         
                     except Exception as e:
-                        self.log_message(f"Error scanning {symbol}: {str(e)[:20]}", "error")
+                        self.log_message(f"Error scanning {symbol}: {str(e)[:40]}", "error")
                         self.current_data[symbol] = None
+                        error_count += 1
                         continue
                 
-                # Complete scan cycle
+                # Complete scan cycle with detailed stats
                 self.current_scanning_symbol = None
                 self.scan_stats['scan_cycles'] += 1
                 self.scan_stats['total_scanned'] = scanned_count
                 self.scan_stats['signals_found'] += signals_found
                 self.scan_stats['last_scan_time'] = datetime.now()
                 
+                # Log summary with error count
                 if signals_found > 0:
-                    self.log_message(f"Scan complete: {signals_found} signals from {scanned_count} coins", "success")
+                    self.log_message(f"Scan complete: {signals_found} signals, {scanned_count} OK, {error_count} errors", "success")
                 else:
-                    self.log_message(f"Scan complete: {scanned_count} coins analyzed, no signals", "info")
+                    self.log_message(f"Scan complete: {scanned_count} OK, {error_count} errors, no signals", "info")
                 
                 time.sleep(12)
                 
             except Exception as e:
-                self.log_message(f"Scanner error: {str(e)[:30]}", "error")
-                time.sleep(30)
+                self.log_message(f"Critical error during scan: {str(e)}", "error")
+                time.sleep(30)  # Wait longer after critical errors
+            
+          
 
     def start(self):
         """Start the bot"""
