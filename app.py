@@ -677,7 +677,7 @@ class CryptoSignalBot:
             if interval not in data:
                 return {}  # Missing a required interval
             
-        return data  # Return data if all intervals are present
+        return data
 
     def calculate_indicators(self, data: Dict[str, pd.DataFrame]) -> Optional[MarketData]:
         """Calculate all technical indicators with comprehensive error handling and fallbacks"""
