@@ -387,8 +387,8 @@ class CryptoSignalBot:
             coin_table.add_row(
                 "Stoch Rec*",
                 Text("✓" if conditions['stoch_recovery'] else "✗", style=stoch_style),
-                f"{data.stoch_k:.1f}",
-                "< 40"
+                f"{data.stoch_k:.1f}K/{data.stoch_d:.1f}D",
+                "< 40, Recov"
             )
             
             # 5. Trend Alignment (CORE)
@@ -737,12 +737,22 @@ class CryptoSignalBot:
         macd_positive_crossover = data.macd_5m > data.macd_signal_5m and data.macd_histogram_5m > 0
         conditions['macd_momentum'] = macd_near_crossover or macd_positive_crossover
         
-        # CORE CONDITION 4: Stochastic Oversold Recovery (FIXED)
-        # Three cases: 1) Deep oversold with recovery, 2) Moderate oversold with strong recovery, 3) Recovery from oversold
-        stoch_deep_oversold_recovering = data.stoch_k < 20 and data.stoch_k > data.stoch_d  # Deep oversold starting to recover
-        stoch_oversold_recovering = data.stoch_k < 30 and data.stoch_k > data.stoch_d * 1.05  # Oversold with clear recovery
-        stoch_recovering_momentum = data.stoch_k > 20 and data.stoch_k < 40 and data.stoch_k > data.stoch_d  # In recovery phase
-        conditions['stoch_recovery'] = stoch_deep_oversold_recovering or stoch_oversold_recovering or stoch_recovering_momentum
+        # CORE CONDITION 4: Stochastic Oversold Recovery (FIXED FOR REAL)
+        # More forgiving conditions for < 40 stochastic values
+        # Deep oversold (below 20) - any sign of life is good
+        stoch_deep_oversold = data.stoch_k < 20 and (data.stoch_k >= data.stoch_d * 0.95)
+        
+        # Regular oversold (below 30) - allow more flexibility
+        stoch_oversold = data.stoch_k < 30 and (data.stoch_k >= data.stoch_d * 0.97 or data.stoch_k > data.stoch_k - 2)
+        
+        # Between 30-40 - recovery or at least not declining
+        stoch_low = data.stoch_k < 40 and data.stoch_k >= 30 and (data.stoch_k >= data.stoch_d * 0.99)
+        
+        # Stochastic momentum - either flattening or rising
+        stoch_rising = abs(data.stoch_k - data.stoch_d) < 3 and data.stoch_k < 40
+        
+        # Accept any of these conditions
+        conditions['stoch_recovery'] = stoch_deep_oversold or stoch_oversold or stoch_low or stoch_rising
         
         # CORE CONDITION 5: Trend Alignment (FIXED)
         # Clearer check: Either price above/near EMA20 OR price showing strong recovery from support
