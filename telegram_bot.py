@@ -31,7 +31,7 @@ class TelegramNotifier:
             return False
     
     def send_signal_alert(self, signal: Dict) -> bool:
-        """Send trading signal alert"""
+        """Send trading signal alert for optimized strategy"""
         try:
             coin = signal['coin']
             entry_price = signal['entry_price']
@@ -41,44 +41,64 @@ class TelegramNotifier:
             entry_level = signal['entry_level']
             confidence = signal['confidence']
             
+            # New optimized strategy fields
+            signal_strength = signal.get('signal_strength', 5)
+            core_conditions_met = signal.get('core_conditions_met', 4)
+            
             atr_value = signal.get('atr_value', 0)
             imbalance_ratio = signal.get('order_book_imbalance', 0)
-            strategy_version = signal.get('strategy_version', 'v1')
+            strategy_version = signal.get('strategy_version', 'v4_optimized')
             
             tp1_profit = ((tp1 - entry_price) / entry_price) * 100
             tp2_profit = ((tp2 - entry_price) / entry_price) * 100
             stop_loss_risk = ((entry_price - stop_loss) / entry_price) * 100
             
+            # Enhanced signal strength indicators
+            if signal_strength >= 6:
+                strength_emoji = "🔥🔥🔥"
+                strength_text = "PERFECT"
+            elif signal_strength == 5:
+                strength_emoji = "🔥🔥"
+                strength_text = "STRONG"
+            else:
+                strength_emoji = "🔥"
+                strength_text = "GOOD"
+            
             message = f"""
-🚨 **CRYPTO SIGNAL** 🚨
+🚨 **CRYPTO SIGNAL - OPTIMIZED** 🚨
 
-💰 **{coin}/USDT LONG**
-📊 **Entry Level:** {entry_level}
+💰 **{coin}/USDT LONG** {strength_emoji}
+📊 **Signal Strength:** {strength_text} ({signal_strength}/6)
+🎯 **Core Conditions:** {core_conditions_met}/5 ✅
 🎯 **Confidence:** {confidence}%
+📈 **Entry Level:** {entry_level}
 
 💵 **Entry:** ${entry_price:.6f}
 🎯 **TP1:** ${tp1:.6f} (+{tp1_profit:.2f}%)
 🎯 **TP2:** ${tp2:.6f} (+{tp2_profit:.2f}%)
 🛡️ **Stop Loss:** ${stop_loss:.6f} (-{stop_loss_risk:.2f}%)
 
+📊 **Technical Details:**
+• RSI 5m: {signal.get('rsi_5m', 0):.1f}
+• MACD Momentum: {signal.get('macd_momentum', 0):.4f}
+• Stochastic K: {signal.get('stoch_k', 0):.1f}
+• Volatility Ratio: {signal.get('volatility_ratio', 1):.2f}x
+
 📈 **ATR:** {atr_value:.6f}
-⚖️ **Bid/Ask Ratio:** {imbalance_ratio:.2f}:1
+⚖️ **Order Book:** {imbalance_ratio:.2f}:1
 🔧 **Strategy:** {strategy_version}
 
-✅ **All 8 Conditions Met:**
-• BB Touch ✓
-• RSI 5m < 50 ✓  
-• RSI 15m > 35 ✓
-• RSI 1h > 50 ✓
-• Volume Declining ✓
-• Above Weekly Support ✓
-• EMA Stack Aligned ✓
-• Daily Trend UP ✓
+✅ **5-Core Strategy Active:**
+• Bollinger Band Touch ✓
+• RSI Oversold Recovery ✓
+• MACD Momentum Building ✓
+• Stochastic Recovery ✓
+• Trend Alignment ✓
 
-💪 **Order Book:** Strong buying pressure
+💪 **Optimized for More Signals!**
 ⏰ **Time:** {datetime.now().strftime('%H:%M:%S')}
 
-🚀 **35-Coin Scanner - Terminal Edition**
+🚀 **35-Coin Scanner - Optimized Edition**
             """.strip()
             
             return self.send_message(message)
