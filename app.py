@@ -97,19 +97,19 @@ class CryptoSignalBot:
         self.setup_layout()
         
     def setup_layout(self):
-        """Setup the terminal layout optimized for 14" MacBook - improved proportions"""
+        """Setup the terminal layout optimized for 14" MacBook - more horizontal"""
         self.layout.split_column(
             Layout(name="header", size=2),
             Layout(name="body"),
             Layout(name="footer", size=2)
         )
         
-        # IMPROVED: Better proportions - reduce gainers width, increase conditions detail
+        # More horizontal layout - 4 columns for more details
         self.layout["body"].split_row(
             Layout(name="left", ratio=1),      # Stats + Positions
             Layout(name="middle", ratio=1),    # Signals + Logs  
-            Layout(name="right", ratio=1.3),   # Gainers table (reduced from 2)
-            Layout(name="details", ratio=1.7)  # Top conditions (increased from 1)
+            Layout(name="right", ratio=2),     # Gainers table
+            Layout(name="details", ratio=1)    # Top conditions
         )
         
         # Left column: Stats + Positions
@@ -129,9 +129,9 @@ class CryptoSignalBot:
             Layout(name="gainers")
         )
         
-        # Details column: Top conditions with more space
+        # Details column: Top conditions instead of current scan
         self.layout["details"].split_column(
-            Layout(name="conditions_detail")
+            Layout(name="conditions_detail")  # Remove current_scan, just show top conditions
         )
 
     def log_message(self, message: str, level: str = "info"):
@@ -201,15 +201,15 @@ class CryptoSignalBot:
         return Panel(table, style="blue")
 
     def create_gainers_panel(self) -> Panel:
-        """Compact gainers panel for reduced width"""
+        """Create top gainers panel with improved data validation and error handling"""
         table = Table(title="Top 35 Gainers", box=box.SIMPLE)
         table.add_column("Coin", style="cyan", width=4)
-        table.add_column("Price", style="white", width=6)  # Reduced from 7
-        table.add_column("Chg%", style="white", width=4)   # Reduced from 5
-        table.add_column("Core", style="white", width=3)   # Reduced from 4
-        table.add_column("Vol", style="white", width=4)    # Reduced from 5
-        table.add_column("RSI", style="white", width=3)    # Reduced from 4
-        table.add_column("Status", style="white", width=5) # Reduced from 6
+        table.add_column("Price", style="white", width=7)
+        table.add_column("Chg%", style="white", width=5)
+        table.add_column("Core", style="white", width=4)  
+        table.add_column("Vol", style="white", width=5)
+        table.add_column("RSI", style="white", width=4)
+        table.add_column("Status", style="white", width=6)
         
         display_gainers = self.top_gainers[:35]
         
@@ -217,63 +217,69 @@ class CryptoSignalBot:
             symbol = gainer['symbol']
             data = self.current_data.get(symbol)
             
-            if data and hasattr(data, 'volume') and hasattr(data, 'volume_avg') and hasattr(data, 'rsi_5m'):
-                # Only calculate if we have valid data
-                try:
+            # Default values in case data is missing
+            core_conditions_met = 0
+            volume_str = "..."
+            rsi_str = "..."
+            status = "Watch"
+            status_style = "white"
+            
+            try:
+                if data and hasattr(data, 'rsi_5m') and hasattr(data, 'volume') and hasattr(data, 'volume_avg'):
+                    # Safely calculate conditions
                     conditions = self.check_strategy_conditions(data)
                     core_conditions = ['bb_touch', 'rsi_oversold', 'macd_momentum', 'stoch_recovery', 'trend_alignment']
                     core_conditions_met = sum(conditions[cond] for cond in core_conditions)
                     
                     # Safe volume calculation
-                    if data.volume_avg > 0 and not pd.isna(data.volume) and not pd.isna(data.volume_avg):
+                    if hasattr(data, 'volume') and hasattr(data, 'volume_avg') and data.volume_avg > 0:
                         volume_str = f"{data.volume/data.volume_avg:.1f}x"
                     else:
-                        volume_str = "N/A"
-                    
+                        volume_str = "0.0x"
+                        
                     # Safe RSI calculation
-                    if not pd.isna(data.rsi_5m) and data.rsi_5m > 0:
+                    if hasattr(data, 'rsi_5m') and not pd.isna(data.rsi_5m):
                         rsi_str = f"{data.rsi_5m:.0f}"
                     else:
-                        rsi_str = "N/A"
+                        rsi_str = "50"
                         
-                except Exception as e:
-                    # Fallback if conditions calculation fails
-                    core_conditions_met = 0
-                    volume_str = "ERR"
-                    rsi_str = "ERR"
-            else:
-                # No data available yet
-                core_conditions_met = 0
-                volume_str = "..." if symbol == f"{self.current_scanning_symbol}USDT" else "N/A"
-                rsi_str = "..." if symbol == f"{self.current_scanning_symbol}USDT" else "N/A"
+                    # Status determination
+                    if symbol == f"{self.current_scanning_symbol}USDT":
+                        status = "SCAN"
+                        status_style = "yellow"
+                    elif core_conditions_met >= 4:
+                        status = "READY"
+                        status_style = "red"
+                    elif core_conditions_met >= 3:
+                        status = "Near"
+                        status_style = "yellow"
+                    else:
+                        status = "Watch"
+                        status_style = "white"
+                else:
+                    # Mark as scanning if this is the current symbol
+                    if symbol == f"{self.current_scanning_symbol}USDT":
+                        volume_str = "..."
+                        rsi_str = "..."
+                        status = "SCAN"
+                        status_style = "yellow"
+            except Exception as e:
+                # Fallback if any calculation fails
+                self.log_message(f"Error processing {symbol}: {str(e)[:20]}", "error")
             
             change_style = "green" if gainer['change_24h'] > 0 else "red"
             conditions_style = "green" if core_conditions_met >= 4 else "yellow" if core_conditions_met >= 3 else "white"
             
-            # Status determination
-            if symbol == f"{self.current_scanning_symbol}USDT":
-                status = "SCAN"
-                status_style = "yellow"
-            elif core_conditions_met >= 4:
-                status = "READY"
-                status_style = "red"
-            elif core_conditions_met >= 3:
-                status = "Near"
-                status_style = "yellow"
-            else:
-                status = "Watch"
-                status_style = "white"
-            
             table.add_row(
                 gainer['coin'][:4],
-                f"${gainer['price']:.2f}",  # Reduced decimal places
+                f"${gainer['price']:.3f}",
                 Text(f"{gainer['change_24h']:+.1f}", style=change_style),
                 Text(f"{core_conditions_met}/5", style=conditions_style),
                 volume_str,
                 rsi_str,
                 Text(status, style=status_style)
             )
-    
+        
         return Panel(table, style="magenta")
 
     def create_current_scan_panel(self) -> Panel:
@@ -311,7 +317,7 @@ class CryptoSignalBot:
         return Panel(table, title=f"Scanning: {self.current_scanning_symbol}", style="blue")
 
     def create_conditions_detail_panel(self) -> Panel:
-        """Enhanced conditions panel with better spacing and readability"""
+        """Updated conditions panel for new 5-condition strategy"""
         # Find top 3 coins with most conditions met
         top_coins = []
         
@@ -343,51 +349,43 @@ class CryptoSignalBot:
         if not top_3_coins:
             return Panel(
                 Align.center(Text("No conditions met yet", style="dim")),
-                title="Top Conditions Analysis",
+                title="Top Conditions",
                 style="white"
             )
         
-        # Create layout with proper spacing
-        main_layout = Layout()
-        main_layout.split_column(
-            *[Layout(name=f"coin_{i}") for i in range(3)]
-        )
+        # Create vertical layout with one table for each coin
+        tables = []
         
-        for i, coin_info in enumerate(top_3_coins):
+        for coin_info in top_3_coins:
             conditions = coin_info['conditions']
             data = coin_info['data']
             
-            # Create enhanced table for this coin with better spacing
+            # Create detailed table for this coin
             coin_table = Table(
                 title=f"{coin_info['coin']} - {coin_info['core_conditions_met']}/5 Core ({coin_info['total_conditions']}/6 Total)", 
-                box=box.ROUNDED,  # Better looking box style
-                title_style="bold green" if coin_info['core_conditions_met'] >= 4 else "bold yellow" if coin_info['core_conditions_met'] >= 3 else "cyan",
-                show_header=True,
-                header_style="bold blue"
+                box=box.SIMPLE, 
+                title_style="bold green" if coin_info['core_conditions_met'] >= 4 else "bold yellow" if coin_info['core_conditions_met'] >= 3 else "cyan"
             )
             
-            coin_table.add_column("Condition", style="white", width=12, no_wrap=True)
-            coin_table.add_column("Status", style="white", width=4, justify="center")
-            coin_table.add_column("Value", style="white", width=10, justify="right")
-            coin_table.add_column("Target", style="white", width=12, justify="center")
+            coin_table.add_column("Condition", style="white", width=10)
+            coin_table.add_column("Status", style="white", width=3)
+            coin_table.add_column("Value", style="white", width=7)
+            coin_table.add_column("Target", style="white", width=7)
             
-            # Price and change info with better formatting
+            # Price and change info
             coin_table.add_row(
-                "💰 Price",
+                "Price",
                 "",
                 f"${coin_info['price']:.4f}",
-                Text(f"{coin_info['change']:+.1f}%", style="green" if coin_info['change'] > 0 else "red")
+                f"{coin_info['change']:+.1f}%"
             )
             
-            # Add separator
-            coin_table.add_row("─" * 12, "─" * 4, "─" * 10, "─" * 12)
-            
-            # 1. BB Touch (CORE) - Enhanced display
+            # 1. BB Touch (CORE)
             bb_distance = ((data.price - data.bb_lower) / data.bb_lower) * 100
             bb_style = "green" if conditions['bb_touch'] else "red"
             coin_table.add_row(
-                "📊 BB Touch *",
-                Text("✅" if conditions['bb_touch'] else "❌", style=bb_style),
+                "BB Touch*",
+                Text("✓" if conditions['bb_touch'] else "✗", style=bb_style),
                 f"{bb_distance:.2f}%",
                 "< 1.5%"
             )
@@ -395,8 +393,8 @@ class CryptoSignalBot:
             # 2. RSI Oversold (CORE)
             rsi_style = "green" if conditions['rsi_oversold'] else "red"
             coin_table.add_row(
-                "📈 RSI Oversold *",
-                Text("✅" if conditions['rsi_oversold'] else "❌", style=rsi_style),
+                "RSI Oversold*",
+                Text("✓" if conditions['rsi_oversold'] else "✗", style=rsi_style),
                 f"{data.rsi_5m:.1f}",
                 "25-55"
             )
@@ -404,8 +402,8 @@ class CryptoSignalBot:
             # 3. MACD Momentum (CORE)
             macd_style = "green" if conditions['macd_momentum'] else "red"
             coin_table.add_row(
-                "⚡ MACD Momentum *",
-                Text("✅" if conditions['macd_momentum'] else "❌", style=macd_style),
+                "MACD Mom*",
+                Text("✓" if conditions['macd_momentum'] else "✗", style=macd_style),
                 f"{data.macd_histogram_5m:.4f}",
                 "> -0.001"
             )
@@ -413,8 +411,8 @@ class CryptoSignalBot:
             # 4. Stoch Recovery (CORE)
             stoch_style = "green" if conditions['stoch_recovery'] else "red"
             coin_table.add_row(
-                "🔄 Stoch Recovery *",
-                Text("✅" if conditions['stoch_recovery'] else "❌", style=stoch_style),
+                "Stoch Rec*",
+                Text("✓" if conditions['stoch_recovery'] else "✗", style=stoch_style),
                 f"{data.stoch_k:.1f}",
                 "< 40"
             )
@@ -422,39 +420,36 @@ class CryptoSignalBot:
             # 5. Trend Alignment (CORE)
             trend_style = "green" if conditions['trend_alignment'] else "red"
             coin_table.add_row(
-                "📊 Trend Align *",
-                Text("✅" if conditions['trend_alignment'] else "❌", style=trend_style),
+                "Trend*",
+                Text("✓" if conditions['trend_alignment'] else "✗", style=trend_style),
                 data.btc_trend,
                 "Aligned"
             )
             
-            # Add separator
-            coin_table.add_row("─" * 12, "─" * 4, "─" * 10, "─" * 12)
-            
             # 6. Volume Confirm (BONUS)
-            volume_style = "green" if conditions['volume_confirm'] else "dim"
+            volume_style = "green" if conditions['volume_confirm'] else "yellow"
             volume_ratio = data.volume / data.volume_avg
             coin_table.add_row(
-                "📊 Volume (Bonus)",
-                Text("✅" if conditions['volume_confirm'] else "○", style=volume_style),
+                "Volume",
+                Text("✓" if conditions['volume_confirm'] else "○", style=volume_style),
                 f"{volume_ratio:.2f}x",
                 "<0.8 or >1.3"
             )
             
-            # Assign to layout
-            main_layout[f"coin_{i}"].update(Panel(coin_table, expand=True))
+            tables.append(coin_table)
         
-        # Fill remaining slots with empty panels
-        for i in range(len(top_3_coins), 3):
-            main_layout[f"coin_{i}"].update(Panel("", expand=True))
+        # Fill remaining slots
+        while len(tables) < 3:
+            empty_table = Table(box=None)
+            empty_table.add_row("")
+            tables.append(empty_table)
         
-        return Panel(
-            main_layout, 
-            title="📊 5-Core Strategy Analysis (⭐ = Required, Need 4/5 Core)", 
-            title_align="center",
-            style="green" if top_3_coins and top_3_coins[0]['core_conditions_met'] >= 4 else "white",
-            border_style="bold"
-        )
+        # Stack tables vertically
+        layout = Table.grid()
+        for table in tables:
+            layout.add_row(table)
+        
+        return Panel(layout, title="5-Core Strategy (*=Required, 4/5 needed)", style="green" if top_3_coins and top_3_coins[0]['core_conditions_met'] >= 4 else "white")
 
     def create_signals_panel(self) -> Panel:
         """Create recent signals panel with more details"""
@@ -650,65 +645,6 @@ class CryptoSignalBot:
                 
         return data
     
-    def get_order_book_imbalance(self, symbol: str) -> Optional[float]:
-        """Get order book imbalance ratio"""
-        try:
-            url = "https://api.binance.com/api/v3/depth"
-            params = {'symbol': symbol, 'limit': 100}
-            response = requests.get(url, params=params, timeout=5)
-            
-            if response.status_code == 200:
-                depth_data = response.json()
-                
-                total_bid_volume = sum(float(bid[1]) for bid in depth_data['bids'])
-                total_ask_volume = sum(float(ask[1]) for ask in depth_data['asks'])
-                
-                if total_ask_volume > 0:
-                    return total_bid_volume / total_ask_volume
-                else:
-                    return float('inf')
-            return None
-        except Exception:
-            return None
-
-    def calculate_atr_levels(self, data: Dict[str, pd.DataFrame], entry_price: float) -> Dict[str, float]:
-        """Calculate ATR-based levels"""
-        try:
-            df_5m = data['5m'].copy()
-            
-            # Convert to numeric to avoid Rational instance error
-            df_5m['high'] = pd.to_numeric(df_5m['high'], errors='coerce')
-            df_5m['low'] = pd.to_numeric(df_5m['low'], errors='coerce')
-            df_5m['close'] = pd.to_numeric(df_5m['close'], errors='coerce')
-            
-            # Calculate True Range components
-            df_5m['high_low'] = df_5m['high'] - df_5m['low']
-            df_5m['high_close_prev'] = abs(df_5m['high'] - df_5m['close'].shift(1))
-            df_5m['low_close_prev'] = abs(df_5m['low'] - df_5m['close'].shift(1))
-            df_5m['true_range'] = df_5m[['high_low', 'high_close_prev', 'low_close_prev']].max(axis=1)
-            
-            # Calculate ATR (14-period average)
-            atr_14 = df_5m['true_range'].rolling(window=14).mean().iloc[-1]
-            
-            # Validate ATR
-            if pd.isna(atr_14) or atr_14 <= 0:
-                atr_14 = entry_price * 0.02  # 2% default
-            
-            return {
-                'atr': float(atr_14),
-                'stop_loss': float(entry_price - (0.8 * atr_14)),
-                'tp1': float(entry_price + (1.0 * atr_14)),
-                'tp2': float(entry_price + (1.8 * atr_14))
-            }
-        except Exception as e:
-            # Fallback to percentage-based levels
-            return {
-                'atr': float(entry_price * 0.02),
-                'stop_loss': float(entry_price * 0.99),
-                'tp1': float(entry_price * 1.008),
-                'tp2': float(entry_price * 1.015)
-            }
-
     def calculate_indicators(self, data: Dict[str, pd.DataFrame]) -> Optional[MarketData]:
         """Calculate all technical indicators with better error handling"""
         try:
@@ -730,244 +666,93 @@ class CryptoSignalBot:
             # Validate price
             if pd.isna(current_price) or current_price <= 0:
                 return None
-            
-            # RSI indicators with validation
-            try:
-                close_5m = data['5m']['close'].dropna()
-                if len(close_5m) >= 7:
-                    rsi_5m = ta.momentum.RSIIndicator(close_5m, window=7).rsi().iloc[-1]
-                    if pd.isna(rsi_5m):
-                        rsi_5m = 50.0
-                else:
-                    rsi_5m = 50.0
-            except:
-                rsi_5m = 50.0
-            
-            try:
-                close_15m = data['15m']['close'].dropna()
-                if len(close_15m) >= 7:
-                    rsi_15m = ta.momentum.RSIIndicator(close_15m, window=7).rsi().iloc[-1]
-                    if pd.isna(rsi_15m):
-                        rsi_15m = 50.0
-                else:
-                    rsi_15m = 50.0
-            except:
-                rsi_15m = 50.0
-            
-            try:
-                close_1h = data['1h']['close'].dropna()
-                if len(close_1h) >= 14:
-                    rsi_1h = ta.momentum.RSIIndicator(close_1h, window=14).rsi().iloc[-1]
-                    if pd.isna(rsi_1h):
-                        rsi_1h = 50.0
-                else:
-                    rsi_1h = 50.0
-            except:
-                rsi_1h = 50.0
-    
-            # Enhanced Bollinger Bands with validation
-            try:
-                close_5m = data['5m']['close'].dropna()
-                if len(close_5m) >= 20:
-                    bb_5m = ta.volatility.BollingerBands(close_5m, window=20, window_dev=2)
-                    bb_lower = bb_5m.bollinger_lband().iloc[-1]
-                    bb_upper = bb_5m.bollinger_hband().iloc[-1]
-                    bb_middle = bb_5m.bollinger_mavg().iloc[-1]
-                    
-                    # Validate BB values
-                    if pd.isna(bb_lower) or pd.isna(bb_upper) or pd.isna(bb_middle):
-                        bb_lower = current_price * 0.98
-                        bb_upper = current_price * 1.02
-                        bb_middle = current_price
-                else:
-                    bb_lower = current_price * 0.98
-                    bb_upper = current_price * 1.02
-                    bb_middle = current_price
-            except:
-                bb_lower = current_price * 0.98
-                bb_upper = current_price * 1.02
-                bb_middle = current_price
-    
-            # EMA indicators with validation
-            try:
-                close_15m = data['15m']['close'].dropna()
-                close_1d = data['1d']['close'].dropna()
                 
-                if len(close_15m) >= 21:
-                    ema_9_15m = ta.trend.EMAIndicator(close_15m, window=9).ema_indicator().iloc[-1]
-                    ema_21_15m = ta.trend.EMAIndicator(close_15m, window=21).ema_indicator().iloc[-1]
-                    ema_20_15m = ta.trend.EMAIndicator(close_15m, window=20).ema_indicator().iloc[-1]
-                else:
-                    ema_9_15m = current_price
-                    ema_21_15m = current_price
-                    ema_20_15m = current_price
+            # Existing RSI indicators
+            rsi_5m = ta.momentum.RSIIndicator(data['5m']['close'], window=7).rsi().iloc[-1]
+            rsi_15m = ta.momentum.RSIIndicator(data['15m']['close'], window=7).rsi().iloc[-1]
+            rsi_1h = ta.momentum.RSIIndicator(data['1h']['close'], window=14).rsi().iloc[-1]
             
-                if len(close_1d) >= 50:
-                    ema_50_daily = ta.trend.EMAIndicator(close_1d, window=50).ema_indicator().iloc[-1]
-                else:
-                    ema_50_daily = current_price
+            # Enhanced Bollinger Bands
+            bb_5m = ta.volatility.BollingerBands(data['5m']['close'], window=20, window_dev=2)
+            bb_lower = bb_5m.bollinger_lband().iloc[-1]
+            bb_upper = bb_5m.bollinger_hband().iloc[-1]
+            bb_middle = bb_5m.bollinger_mavg().iloc[-1]
             
-                # Validate EMA values
-                if pd.isna(ema_9_15m): ema_9_15m = current_price
-                if pd.isna(ema_21_15m): ema_21_15m = current_price
-                if pd.isna(ema_20_15m): ema_20_15m = current_price
-                if pd.isna(ema_50_daily): ema_50_daily = current_price
-            except:
-                ema_9_15m = current_price
-                ema_21_15m = current_price
-                ema_20_15m = current_price
-                ema_50_daily = current_price
-    
-            # MACD for momentum confirmation with validation
-            try:
-                close_5m = data['5m']['close'].dropna()
-                if len(close_5m) >= 35:  # Need at least 35 periods for MACD
-                    macd_indicator = ta.trend.MACD(close_5m, window_slow=26, window_fast=12, window_sign=9)
-                    macd_5m = macd_indicator.macd().iloc[-1]
-                    macd_signal_5m = macd_indicator.macd_signal().iloc[-1]
-                    macd_histogram_5m = macd_indicator.macd_diff().iloc[-1]
-                    
-                    # Validate MACD values
-                    if pd.isna(macd_5m): macd_5m = 0.0
-                    if pd.isna(macd_signal_5m): macd_signal_5m = 0.0
-                    if pd.isna(macd_histogram_5m): macd_histogram_5m = 0.0
-                else:
-                    macd_5m = 0.0
-                    macd_signal_5m = 0.0
-                    macd_histogram_5m = 0.0
-            except:
-                macd_5m = 0.0
-                macd_signal_5m = 0.0
-                macd_histogram_5m = 0.0
-    
-            # Stochastic for oversold confirmation with validation
-            try:
-                if len(data['5m']) >= 17:  # Need at least 17 periods for Stochastic
-                    high_5m = data['5m']['high'].dropna()
-                    low_5m = data['5m']['low'].dropna()
-                    close_5m = data['5m']['close'].dropna()
-                    
-                    if len(high_5m) >= 17 and len(low_5m) >= 17 and len(close_5m) >= 17:
-                        stoch_indicator = ta.momentum.StochasticOscillator(high_5m, low_5m, close_5m, window=14, smooth_window=3)
-                        stoch_k = stoch_indicator.stoch().iloc[-1]
-                        stoch_d = stoch_indicator.stoch_signal().iloc[-1]
-                        
-                        # Validate Stochastic values
-                        if pd.isna(stoch_k): stoch_k = 50.0
-                        if pd.isna(stoch_d): stoch_d = 50.0
-                    else:
-                        stoch_k = 50.0
-                        stoch_d = 50.0
-                else:
-                    stoch_k = 50.0
-                    stoch_d = 50.0
-            except:
-                stoch_k = 50.0
-                stoch_d = 50.0
-    
-            # ATR for volatility with validation
-            try:
-                if len(data['5m']) >= 14:
-                    high_5m = data['5m']['high'].dropna()
-                    low_5m = data['5m']['low'].dropna()
-                    close_5m = data['5m']['close'].dropna()
-                    
-                    if len(high_5m) >= 14 and len(low_5m) >= 14 and len(close_5m) >= 14:
-                        atr_indicator = ta.volatility.AverageTrueRange(high_5m, low_5m, close_5m, window=14)
-                        atr_5m = atr_indicator.average_true_range().iloc[-1]
-                        if pd.isna(atr_5m): atr_5m = current_price * 0.02
-                    else:
-                        atr_5m = current_price * 0.02
-            except:
-                atr_5m = current_price * 0.02
-    
-            # Volume analysis with validation
-            try:
-                volume_5m = data['5m']['volume'].dropna()
-                if len(volume_5m) >= 20:
-                    current_volume = float(volume_5m.iloc[-1])
-                    volume_avg = volume_5m.rolling(20).mean().iloc[-1]
-                    
-                    # Validate volume values
-                    if pd.isna(current_volume) or current_volume <= 0:
-                        current_volume = 1000.0
-                    if pd.isna(volume_avg) or volume_avg <= 0:
-                        volume_avg = current_volume
-                else:
-                    current_volume = 1000.0
-                    volume_avg = 1000.0
-            except:
-                current_volume = 1000.0
-                volume_avg = 1000.0
-    
-            # Support level with validation
-            try:
-                low_1d = data['1d']['low'].dropna()
-                if len(low_1d) >= 7:
-                    weekly_support = low_1d.tail(7).min()
-                    if pd.isna(weekly_support):
-                        weekly_support = current_price * 0.95
-                else:
-                    weekly_support = current_price * 0.95
-            except:
-                weekly_support = current_price * 0.95
-    
-            # Enhanced BTC trend strength with validation
-            try:
-                price_vs_ema50 = (current_price - ema_50_daily) / ema_50_daily * 100
-                btc_trend = "UP" if price_vs_ema50 > -2 else "DOWN"
-                btc_strength = abs(price_vs_ema50)
-                
-                # Validate trend values
-                if pd.isna(price_vs_ema50):
-                    price_vs_ema50 = 0.0
-                    btc_strength = 0.0
-                    btc_trend = "NEUTRAL"
-            except:
-                price_vs_ema50 = 0.0
-                btc_strength = 0.0
-                btc_trend = "NEUTRAL"
-    
-            # Volatility ratio for market regime with validation
-            try:
-                bb_width = (bb_upper - bb_lower) / bb_middle
-                volatility_ratio = 1.0  # Default to neutral
-                
-                # Simplified volatility calculation to avoid errors
-                if not pd.isna(bb_width) and bb_width > 0:
-                    volatility_ratio = min(max(bb_width * 50, 0.5), 3.0)  # Normalize and clamp
-            except:
-                volatility_ratio = 1.0
-    
-            # Ensure all values are float and not NaN
+            # EMA indicators
+            ema_9_15m = ta.trend.EMAIndicator(data['15m']['close'], window=9).ema_indicator().iloc[-1]
+            ema_21_15m = ta.trend.EMAIndicator(data['15m']['close'], window=21).ema_indicator().iloc[-1]
+            ema_20_15m = ta.trend.EMAIndicator(data['15m']['close'], window=20).ema_indicator().iloc[-1]
+            ema_50_daily = ta.trend.EMAIndicator(data['1d']['close'], window=50).ema_indicator().iloc[-1]
+            
+            # NEW: MACD for momentum confirmation
+            macd_indicator = ta.trend.MACD(data['5m']['close'], window_slow=26, window_fast=12, window_sign=9)
+            macd_5m = macd_indicator.macd().iloc[-1]
+            macd_signal_5m = macd_indicator.macd_signal().iloc[-1]
+            macd_histogram_5m = macd_indicator.macd_diff().iloc[-1]
+            
+            # NEW: Stochastic for oversold confirmation
+            stoch_indicator = ta.momentum.StochasticOscillator(data['5m']['high'], data['5m']['low'], data['5m']['close'], window=14, smooth_window=3)
+            stoch_k = stoch_indicator.stoch().iloc[-1]
+            stoch_d = stoch_indicator.stoch_signal().iloc[-1]
+            
+            # NEW: ATR for volatility
+            atr_indicator = ta.volatility.AverageTrueRange(data['5m']['high'], data['5m']['low'], data['5m']['close'], window=14)
+            atr_5m = atr_indicator.average_true_range().iloc[-1]
+            
+            # Volume analysis
+            current_volume = float(data['5m']['volume'].iloc[-1])
+            volume_avg = data['5m']['volume'].rolling(20).mean().iloc[-1]
+            
+            # Support level
+            weekly_support = data['1d']['low'].tail(7).min()
+            
+            # NEW: Enhanced BTC trend strength
+            price_vs_ema50 = (current_price - ema_50_daily) / ema_50_daily * 100
+            btc_trend = "UP" if price_vs_ema50 > -2 else "DOWN"  # More lenient
+            btc_strength = abs(price_vs_ema50)
+            
+            # NEW: Volatility ratio for market regime
+            bb_width = (bb_upper - bb_lower) / bb_middle
+            historical_bb_width = []
+            for i in range(20):
+                try:
+                    hist_bb = ta.volatility.BollingerBands(data['5m']['close'].iloc[-(20-i):], window=20, window_dev=2)
+                    hist_width = (hist_bb.bollinger_hband().iloc[-1] - hist_bb.bollinger_lband().iloc[-1]) / hist_bb.bollinger_mavg().iloc[-1]
+                    historical_bb_width.append(hist_width)
+                except:
+                    continue
+            
+            avg_bb_width = np.mean(historical_bb_width) if historical_bb_width else bb_width
+            volatility_ratio = bb_width / avg_bb_width if avg_bb_width > 0 else 1.0
+            
             return MarketData(
-                price=float(current_price),
-                rsi_5m=float(rsi_5m),
-                rsi_15m=float(rsi_15m),
-                rsi_1h=float(rsi_1h),
-                volume=float(current_volume),
-                volume_avg=float(volume_avg),
-                bb_lower=float(bb_lower),
-                bb_upper=float(bb_upper),
-                bb_middle=float(bb_middle),
-                ema_9_15m=float(ema_9_15m),
-                ema_21_15m=float(ema_21_15m),
-                ema_20_15m=float(ema_20_15m),
-                ema_50_daily=float(ema_50_daily),
-                weekly_support=float(weekly_support),
-                btc_trend=str(btc_trend),
-                macd_5m=float(macd_5m),
-                macd_signal_5m=float(macd_signal_5m),
-                macd_histogram_5m=float(macd_histogram_5m),
-                stoch_k=float(stoch_k),
-                stoch_d=float(stoch_d),
-                atr_5m=float(atr_5m),
-                volatility_ratio=float(volatility_ratio),
-                btc_strength=float(btc_strength),
+                price=current_price,
+                rsi_5m=rsi_5m,
+                rsi_15m=rsi_15m,
+                rsi_1h=rsi_1h,
+                volume=current_volume,
+                volume_avg=volume_avg,
+                bb_lower=bb_lower,
+                bb_upper=bb_upper,
+                bb_middle=bb_middle,
+                ema_9_15m=ema_9_15m,
+                ema_21_15m=ema_21_15m,
+                ema_20_15m=ema_20_15m,
+                ema_50_daily=ema_50_daily,
+                weekly_support=weekly_support,
+                btc_trend=btc_trend,
+                macd_5m=macd_5m,
+                macd_signal_5m=macd_signal_5m,
+                macd_histogram_5m=macd_histogram_5m,
+                stoch_k=stoch_k,
+                stoch_d=stoch_d,
+                atr_5m=atr_5m,
+                volatility_ratio=volatility_ratio,
+                btc_strength=btc_strength,
                 timestamp=datetime.now()
             )
         except Exception as e:
-            # Return None if we can't calculate indicators properly
+            self.log_message(f"Indicator calculation error: {str(e)[:30]}", "error")
             return None
 
     def check_strategy_conditions(self, data: MarketData) -> Dict[str, bool]:
@@ -1094,12 +879,12 @@ class CryptoSignalBot:
         return signal
 
     def run_scanner(self):
-        """Main scanning loop with better error handling"""
+        """Main scanning loop - updated for 35 coins"""
         while self.running:
             try:
                 self.log_message("Fetching top 35 gainers...", "info")
                 self.top_gainers = self.get_top_gainers()
-                self.scanning_symbols = [coin['symbol'] for coin in self.top_gainers[:35]]
+                self.scanning_symbols = [coin['symbol'] for coin in self.top_gainers[:35]]  # Scan 35 coins
                 
                 if not self.scanning_symbols:
                     self.log_message("No symbols to scan", "warning")
@@ -1112,11 +897,10 @@ class CryptoSignalBot:
                 signals_found = 0
                 scanned_count = 0
                 
-                # Clear stale data for symbols not in current top gainers
-                current_symbols = set(self.scanning_symbols)
-                stale_symbols = [s for s in self.current_data.keys() if s not in current_symbols]
-                for symbol in stale_symbols:
-                    del self.current_data[symbol]
+                # Don't clear all data, just mark as stale
+                for symbol in self.current_data.keys():
+                    if symbol not in available_symbols:
+                        self.current_data[symbol] = None
                 
                 self.log_message(f"Starting scan of {len(available_symbols)} coins", "info")
                 
@@ -1128,23 +912,20 @@ class CryptoSignalBot:
                         self.scan_stats['total_scanned'] = scanned_count
                         
                         market_data = self.get_binance_data(symbol)
-                        if not market_data or '5m' not in market_data or market_data['5m'].empty:
+                        if not market_data or '5m' not in market_data:
                             self.current_data[symbol] = None
-                            self.log_message(f"No data for {symbol.replace('USDT', '')}", "warning")
                             continue
                             
                         current_data = self.calculate_indicators(market_data)
                         if not current_data:
                             self.current_data[symbol] = None
-                            self.log_message(f"Failed indicators for {symbol.replace('USDT', '')}", "warning")
                             continue
                         
                         self.current_data[symbol] = current_data
                         scanned_count += 1
                         
                         conditions = self.check_strategy_conditions(current_data)
-                        core_conditions = ['bb_touch', 'rsi_oversold', 'macd_momentum', 'stoch_recovery', 'trend_alignment']
-                        core_conditions_met = sum(conditions[cond] for cond in core_conditions)
+                        conditions_met = sum(conditions.values())
                         
                         # Log progress every 10 coins
                         if scanned_count % 10 == 0:
@@ -1163,8 +944,7 @@ class CryptoSignalBot:
                         time.sleep(0.2)
                         
                     except Exception as e:
-                        coin_name = symbol.replace('USDT', '') if symbol else "Unknown"
-                        self.log_message(f"Error scanning {coin_name}: {str(e)[:15]}", "error")
+                        self.log_message(f"Error scanning {symbol}: {str(e)[:20]}", "error")
                         self.current_data[symbol] = None
                         continue
                 
