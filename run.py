@@ -22,26 +22,11 @@ def main():
         signal.signal(signal.SIGINT, signal_handler)
         
         # Import and run the bot
-        from app import CryptoSignalBot
+        from app import main as run_bot
+        run_bot()
         
-        # Create and start the bot
-        bot = CryptoSignalBot()
-        bot.start()
-        
-        # Import Rich Live for terminal UI
-        from rich.live import Live
-        
-        # Run the dashboard with Live
-        with Live(bot.render_dashboard(), refresh_per_second=2, screen=True) as live:
-            while True:
-                live.update(bot.render_dashboard())
-                import time
-                time.sleep(0.5)
-                
     except KeyboardInterrupt:
         print('\n\n🛑 Bot stopped by user')
-        if 'bot' in locals():
-            bot.stop()
         sys.exit(0)
     except Exception as e:
         print(f'\n❌ Error starting bot: {e}')
