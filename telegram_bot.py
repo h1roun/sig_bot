@@ -31,44 +31,29 @@ class TelegramNotifier:
             return False
     
     def send_signal_alert(self, signal: Dict) -> bool:
-        """Send trading signal alert with scalping-focused message"""
+        """Send trading signal alert"""
         try:
             coin = signal['coin']
             entry_price = signal['entry_price']
             tp1 = signal['tp1']
             tp2 = signal['tp2']
             stop_loss = signal['stop_loss']
+            entry_level = signal['entry_level']
             confidence = signal['confidence']
+            
+            atr_value = signal.get('atr_value', 0)
+            imbalance_ratio = signal.get('order_book_imbalance', 0)
+            strategy_version = signal.get('strategy_version', 'v1')
             
             tp1_profit = ((tp1 - entry_price) / entry_price) * 100
             tp2_profit = ((tp2 - entry_price) / entry_price) * 100
             stop_loss_risk = ((entry_price - stop_loss) / entry_price) * 100
             
-            # Different message for scalp signals
-            if signal.get('type') == 'SCALP_ENTRY':
-                message = f"""
-🔥 **SCALP SIGNAL** 🔥
-
-💰 **{coin}/USDT QUICK LONG**
-⏱️ **Scalping Trade: 1% Target**
-
-💵 **Entry:** ${entry_price:.6f}
-🎯 **TP1:** ${tp1:.6f} (+{tp1_profit:.2f}%)
-🎯 **TP2:** ${tp2:.6f} (+{tp2_profit:.2f}%)
-🛡️ **SL:** ${stop_loss:.6f} (-{stop_loss_risk:.2f}%)
-
-💪 **Bid/Ask Ratio:** {signal.get('order_book_imbalance', 0):.2f}:1
-⏱️ **Time:** {datetime.now().strftime('%H:%M:%S')}
-
-🚀 **Scalping Scanner - Fast Trades**
-                """.strip()
-            else:
-                # Original message for standard signals
-                message = f"""
+            message = f"""
 🚨 **CRYPTO SIGNAL** 🚨
 
 💰 **{coin}/USDT LONG**
-📊 **Entry Level:** {signal.get('entry_level', 1)}
+📊 **Entry Level:** {entry_level}
 🎯 **Confidence:** {confidence}%
 
 💵 **Entry:** ${entry_price:.6f}
@@ -76,19 +61,21 @@ class TelegramNotifier:
 🎯 **TP2:** ${tp2:.6f} (+{tp2_profit:.2f}%)
 🛡️ **Stop Loss:** ${stop_loss:.6f} (-{stop_loss_risk:.2f}%)
 
-📈 **ATR:** {signal.get('atr_value', 0):.6f}
-⚖️ **Bid/Ask Ratio:** {signal.get('order_book_imbalance', 0):.2f}:1
-🔧 **Strategy:** {signal.get('strategy_version', 'v1')}
+📈 **ATR:** {atr_value:.6f}
+⚖️ **Bid/Ask Ratio:** {imbalance_ratio:.2f}:1
+🔧 **Strategy:** {strategy_version}
 
-✅ **Conditions Met:**
-• BB Near ✓
-• RSI Alignment ✓
-• Volume Active ✓
-• Above Support ✓
-• EMA Signal ✓
-• Momentum ✓
+✅ **All 8 Conditions Met:**
+• BB Touch ✓
+• RSI 5m < 50 ✓  
+• RSI 15m > 35 ✓
+• RSI 1h > 50 ✓
+• Volume Declining ✓
+• Above Weekly Support ✓
+• EMA Stack Aligned ✓
+• Daily Trend UP ✓
 
-💪 **Order Book:** Buying pressure
+💪 **Order Book:** Strong buying pressure
 ⏰ **Time:** {datetime.now().strftime('%H:%M:%S')}
 
 🚀 **35-Coin Scanner - Terminal Edition**

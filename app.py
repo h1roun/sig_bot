@@ -672,94 +672,122 @@ class CryptoSignalBot:
             return None
     
     def check_strategy_conditions(self, data: MarketData) -> Dict[str, bool]:
-        """Check scalping conditions - high frequency with 1% targets"""
+        """Check all strategy conditions"""
         conditions = {}
         
-        # 1. Simpler BB condition - just near the band is enough
-        conditions['bb_touch'] = data.price <= data.bb_lower * 1.01  # Relaxed to 1%
+        bb_touch_threshold = data.bb_lower * 1.005
+        conditions['bb_touch'] = data.price <= bb_touch_threshold
+        conditions['rsi_5m'] = data.rsi_5m < 50
+        conditions['rsi_15m'] = data.rsi_15m > 35
+        conditions['rsi_1h'] = data.rsi_1h > 50
+        conditions['volume_decline'] = data.volume < data.volume_avg
+        conditions['weekly_support'] = data.price > data.weekly_support
         
-        # 2-4. More relaxed RSI conditions
-        conditions['rsi_5m'] = data.rsi_5m < 55  # Much more relaxed
-        conditions['rsi_15m'] = data.rsi_15m > 30  # More relaxed
-        conditions['rsi_1h'] = data.rsi_1h > 40    # More relaxed
-        
-        # 5. Volume - now looking for any increase
-        conditions['volume_active'] = data.volume > data.volume_avg * 0.7  # Changed from decline to minimum threshold
-        
-        # 6. Support - much simpler check
-        conditions['weekly_support'] = data.price > data.weekly_support  # Just above weekly low
-        
-        # 7. Simpler EMA check - price crossover is enough
-        conditions['ema_signal'] = (data.price > data.ema_20_15m or  # Either above EMA20
-                                   (data.ema_9_15m > data.ema_21_15m))  # Or EMA9 crossed above EMA21
-        
-        # 8. Market trend - allow in more conditions 
-        conditions['market_ok'] = True  # Always true, we'll use other filters instead
+        ema_stack = (data.price > data.ema_20_15m and 
+                    data.ema_9_15m > data.ema_21_15m and
+                    data.ema_50_daily > data.ema_50_daily * 0.999)
+        conditions['ema_stack'] = ema_stack
+        conditions['daily_trend'] = data.btc_trend == "UP"
         
         return conditions
 
-    def check_entry_signals(self, symbol: str, data: MarketData, conditions: Dict[str, bool]) -> Optional[Dict]:
-        """Check for scalping entry signals - high frequency for 1% moves"""
-        # Need 6 out of 8 conditions met (instead of all 8)
-        conditions_met = sum(conditions.values())
-        if conditions_met < 6:
-            return None
+    def get_order_book_imbalance(self, symbol: str) -> Optional[float]:
+        """Get order book imbalance ratio"""
+        try:
+            url = "https://api.binance.com/api/v3/depth"
+            params = {'symbol': symbol, 'limit': 100}
+            response = requests.get(url, params=params, timeout=5)
             
-        # Only log if at least 6 conditions met
-        self.log_message(f"{symbol}: {conditions_met}/8 conditions met, checking scalping filters...", "info")
+            if response.status_code == 200:
+                depth_data = response.json()
+                
+                total_bid_volume = sum(float(bid[1]) for bid in depth_data['bids'])
+                total_ask_volume = sum(float(ask[1]) for ask in depth_data['asks'])
+                
+                if total_ask_volume > 0:
+                    return total_bid_volume / total_ask_volume
+                else:
+                    return float('inf')
+            return None
+        except Exception:
+            return None
+
+    def calculate_atr_levels(self, data: Dict[str, pd.DataFrame], entry_price: float) -> Dict[str, float]:
+        """Calculate ATR-based levels"""
+        try:
+            df_5m = data['5m'].copy()
+            
+            df_5m['high_low'] = df_5m['high'] - df_5m['low']
+            df_5m['high_close_prev'] = abs(df_5m['high'] - df_5m['close'].shift(1))
+            df_5m['low_close_prev'] = abs(df_5m['low'] - df_5m['close'].shift(1))
+            df_5m['true_range'] = df_5m[['high_low', 'high_close_prev', 'low_close_prev']].max(axis=1)
+            
+            atr_14 = df_5m['true_range'].rolling(window=14).mean().iloc[-1]
+            
+            return {
+                'atr': atr_14,
+                'stop_loss': entry_price - (0.8 * atr_14),
+                'tp1': entry_price + (1.0 * atr_14),
+                'tp2': entry_price + (1.8 * atr_14)
+            }
+        except Exception:
+            return {
+                'atr': 0,
+                'stop_loss': entry_price * 0.99,
+                'tp1': entry_price * 1.008,
+                'tp2': entry_price * 1.015
+            }
+
+    def check_entry_signals(self, symbol: str, data: MarketData, conditions: Dict[str, bool]) -> Optional[Dict]:
+        """Check for entry signals"""
+        if not all(conditions.values()):
+            return None
         
-        # FILTER 1: Check if we're already in a position
         if symbol in self.position_manager.get_active_symbols():
             return None
             
-        # FILTER 2: Shorter cooldown period (2 minutes instead of 5)
         current_time = time.time()
-        if symbol in self.last_alert_time and current_time - self.last_alert_time[symbol] < 120:  # 2 min
+        if symbol in self.last_alert_time and current_time - self.last_alert_time[symbol] < 300:
             return None
             
-        # FILTER 3: Allow more concurrent positions (use config value)
         if len(self.position_manager.get_active_symbols()) >= config.MAX_CONCURRENT_POSITIONS:
             return None
         
-        # FILTER 4: Lower order book imbalance requirement
         imbalance_ratio = self.get_order_book_imbalance(symbol)
-        if imbalance_ratio is None or imbalance_ratio < 1.2:  # Lower threshold to 1.2 (was 1.5)
+        if imbalance_ratio is None or imbalance_ratio < 1.3:
             return None
+
+        entry_level = 1
+        if data.rsi_5m < 40:
+            entry_level = 3
+        elif data.price <= data.bb_lower * 1.002:
+            entry_level = 2
         
-        # Get market data for quick trend check
-        market_data = self.get_binance_data(symbol, intervals=["5m", "15m"])
+        market_data = self.get_binance_data(symbol)
         if not market_data or '5m' not in market_data:
             return None
-            
-        # FILTER 5: Check for immediate momentum (last few candles)
-        if not self._check_recent_momentum(market_data['5m']):
-            return None
-            
-        # Calculate tight targets for 1% scalps
-        scalp_levels = self._calculate_scalping_levels(data.price)
         
-        # Determine entry level - simpler for scalping
-        entry_level = 1  # Default level for all scalps
+        atr_levels = self.calculate_atr_levels(market_data, data.price)
         
         signal = {
-            'type': 'SCALP_ENTRY',
+            'type': 'LONG_ENTRY',
             'symbol': symbol,
             'coin': symbol.replace('USDT', ''),
             'entry_price': data.price,
-            'tp1': scalp_levels['tp1'],  # ~0.5% target
-            'tp2': scalp_levels['tp2'],  # ~1% target
-            'stop_loss': scalp_levels['stop_loss'],  # ~0.5% stop
+            'tp1': atr_levels['tp1'],
+            'tp2': atr_levels['tp2'],
+            'stop_loss': atr_levels['stop_loss'],
             'entry_level': entry_level,
             'rsi_5m': data.rsi_5m,
             'rsi_15m': data.rsi_15m,
             'rsi_1h': data.rsi_1h,
-            'confidence': 75,  # Lower confidence for scalp trades
+            'confidence': 95,
             'timestamp': datetime.now().isoformat(),
+            'atr_value': atr_levels['atr'],
             'order_book_imbalance': imbalance_ratio,
-            'strategy_version': 'v5_scalping'
+            'strategy_version': 'v3_terminal'
         }
         
-        self.log_message(f"{symbol}: Scalping signal generated! Target: +1%", "success")
         self.position_manager.add_position(signal)
         
         if self.telegram_notifier:
@@ -767,35 +795,129 @@ class CryptoSignalBot:
         
         self.last_alert_time[symbol] = current_time
         return signal
-        
-    def _calculate_scalping_levels(self, entry_price: float) -> Dict[str, float]:
-        """Calculate tight targets for scalping 1% moves"""
-        return {
-            'stop_loss': entry_price * 0.995,  # 0.5% stop loss
-            'tp1': entry_price * 1.005,  # 0.5% first take profit
-            'tp2': entry_price * 1.01   # 1.0% second take profit
-        }
-        
-    def _check_recent_momentum(self, df: pd.DataFrame) -> bool:
-        """Check last few candles for positive momentum"""
-        try:
-            # Check last 3 candles
-            last_candles = df.tail(4)  # Last 4 candles
-            
-            # Get last 3 changes
-            changes = []
-            for i in range(1, 4):
-                close_prev = float(last_candles['close'].iloc[-i-1])
-                close_curr = float(last_candles['close'].iloc[-i])
-                changes.append((close_curr - close_prev) / close_prev * 100)
-            
-            # Need at least 1 positive candle in last 3 and overall positive movement
-            positive_candles = sum(1 for c in changes if c > 0)
-            avg_change = sum(changes) / len(changes)
-            
-            return positive_candles >= 1 and avg_change > -0.1  # At least 1 positive and not strongly negative
-            
-        except Exception:
-            return True  # If calculation fails, default to True
 
-# ...existing code...
+    def run_scanner(self):
+        """Main scanning loop - updated for 35 coins"""
+        while self.running:
+            try:
+                self.log_message("Fetching top 35 gainers...", "info")
+                self.top_gainers = self.get_top_gainers()
+                self.scanning_symbols = [coin['symbol'] for coin in self.top_gainers[:35]]  # Scan 35 coins
+                
+                if not self.scanning_symbols:
+                    self.log_message("No symbols to scan", "warning")
+                    time.sleep(30)
+                    continue
+                
+                active_positions = self.position_manager.get_active_symbols()
+                available_symbols = [s for s in self.scanning_symbols if s not in active_positions]
+                
+                signals_found = 0
+                scanned_count = 0
+                
+                # Don't clear all data, just mark as stale
+                for symbol in self.current_data.keys():
+                    if symbol not in available_symbols:
+                        self.current_data[symbol] = None
+                
+                self.log_message(f"Starting scan of {len(available_symbols)} coins", "info")
+                
+                for i, symbol in enumerate(available_symbols):
+                    try:
+                        self.current_scanning_symbol = symbol.replace('USDT', '')
+                        
+                        # Update progress in stats
+                        self.scan_stats['total_scanned'] = scanned_count
+                        
+                        market_data = self.get_binance_data(symbol)
+                        if not market_data or '5m' not in market_data:
+                            self.current_data[symbol] = None
+                            continue
+                            
+                        current_data = self.calculate_indicators(market_data)
+                        if not current_data:
+                            self.current_data[symbol] = None
+                            continue
+                        
+                        self.current_data[symbol] = current_data
+                        scanned_count += 1
+                        
+                        conditions = self.check_strategy_conditions(current_data)
+                        conditions_met = sum(conditions.values())
+                        
+                        # Log progress every 10 coins
+                        if scanned_count % 10 == 0:
+                            self.log_message(f"Scanned {scanned_count}/{len(available_symbols)} coins", "info")
+                        
+                        signal = self.check_entry_signals(symbol, current_data, conditions)
+                        
+                        if signal:
+                            signals_found += 1
+                            coin_name = symbol.replace('USDT', '')
+                            self.log_message(f"SIGNAL: {coin_name} LONG ENTRY - Level {signal['entry_level']}", "success")
+                            
+                            with open('signals.json', 'a') as f:
+                                f.write(json.dumps(signal) + '\n')
+                        
+                        time.sleep(0.2)
+                        
+                    except Exception as e:
+                        self.log_message(f"Error scanning {symbol}: {str(e)[:20]}", "error")
+                        self.current_data[symbol] = None
+                        continue
+                
+                # Complete scan cycle
+                self.current_scanning_symbol = None
+                self.scan_stats['scan_cycles'] += 1
+                self.scan_stats['total_scanned'] = scanned_count
+                self.scan_stats['signals_found'] += signals_found
+                self.scan_stats['last_scan_time'] = datetime.now()
+                
+                if signals_found > 0:
+                    self.log_message(f"Scan complete: {signals_found} signals from {scanned_count} coins", "success")
+                else:
+                    self.log_message(f"Scan complete: {scanned_count} coins analyzed, no signals", "info")
+                
+                time.sleep(12)
+                
+            except Exception as e:
+                self.log_message(f"Scanner error: {str(e)[:30]}", "error")
+                time.sleep(30)
+
+    def start(self):
+        """Start the bot"""
+        if not self.running:
+            self.running = True
+            scanner_thread = threading.Thread(target=self.run_scanner, daemon=True)
+            scanner_thread.start()
+            self.log_message("Multi-Scanner Started - Terminal Edition", "success")
+
+    def stop(self):
+        """Stop the bot"""
+        self.running = False
+        self.position_manager.stop_monitoring()
+        self.log_message("Bot Stopped", "warning")
+
+def main():
+    """Main function to run the terminal app"""
+    # Clear screen and hide cursor
+    os.system('clear' if os.name == 'posix' else 'cls')
+    
+    bot = CryptoSignalBot()
+    
+    # Start the bot
+    bot.start()
+    
+    try:
+        with Live(bot.render_dashboard(), refresh_per_second=2, screen=True) as live:
+            while True:
+                live.update(bot.render_dashboard())
+                time.sleep(0.5)
+                
+    except KeyboardInterrupt:
+        bot.stop()
+        bot.console.print("\n[red]Bot stopped by user[/red]")
+        sys.exit(0)
+
+if __name__ == '__main__':
+    main()
