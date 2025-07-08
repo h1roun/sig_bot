@@ -979,6 +979,22 @@ class CryptoSignalBot:
                 self.log_message(f"Scanner error: {str(e)}", "error")
                 time.sleep(30)
 
+    def start(self):
+        """Start the bot"""
+        if not self.running:
+            self.running = True
+            scanner_thread = threading.Thread(target=self.run_scanner, daemon=True)
+            scanner_thread.start()
+            self.log_message("✅ Bot started - Scanning for signals", "success")
+    
+    def stop(self):
+        """Stop the bot"""
+        if self.running:
+            self.running = False
+            if self.position_manager:
+                self.position_manager.stop_monitoring()
+            self.log_message("⚠️ Bot stopped", "warning")
+    
     def get_order_book_imbalance(self, symbol: str) -> Optional[float]:
         """Get order book imbalance ratio with better error handling and fallback"""
         try:
