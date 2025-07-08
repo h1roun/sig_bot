@@ -88,28 +88,40 @@ class CryptoSignalBot:
         self.setup_layout()
         
     def setup_layout(self):
-        """Setup the terminal layout optimized for 14" MacBook"""
+        """Setup the terminal layout optimized for 14" MacBook - more horizontal"""
         self.layout.split_column(
-            Layout(name="header", size=2),  # Reduced from 3 to 2
+            Layout(name="header", size=2),
             Layout(name="body"),
-            Layout(name="footer", size=2)   # Reduced from 3 to 2
+            Layout(name="footer", size=2)
         )
         
-        # Better ratio for 14" screen
+        # More horizontal layout - 4 columns for more details
         self.layout["body"].split_row(
-            Layout(name="left", ratio=2),   # Slightly wider left panel
-            Layout(name="right", ratio=3)   # Wider right panel for gainers
+            Layout(name="left", ratio=1),      # Stats + Positions
+            Layout(name="middle", ratio=1),    # Signals + Logs  
+            Layout(name="right", ratio=2),     # Gainers table
+            Layout(name="details", ratio=1)    # Detailed conditions
         )
         
+        # Left column: Stats + Positions
         self.layout["left"].split_column(
-            Layout(name="stats", size=8),     # Reduced from 10
-            Layout(name="positions", size=12), # Reduced from 15
-            Layout(name="signals")
+            Layout(name="stats", size=10),
+            Layout(name="positions")
         )
         
-        self.layout["right"].split_column(
-            Layout(name="gainers"),
-            Layout(name="logs", size=6)       # Reduced from 8
+        # Middle column: Signals + Logs
+        self.layout["middle"].split_column(
+            Layout(name="signals", ratio=2),
+            Layout(name="logs", ratio=1)
+        )
+        
+        # Right column: Gainers
+        self.layout["right"].update(Layout(name="gainers"))
+        
+        # Details column: Condition breakdown
+        self.layout["details"].split_column(
+            Layout(name="current_scan", size=8),
+            Layout(name="conditions_detail")
         )
 
     def log_message(self, message: str, level: str = "info"):
@@ -138,81 +150,56 @@ class CryptoSignalBot:
         return Panel(Align.center(header_text), style="blue")
 
     def create_stats_panel(self) -> Panel:
-        """Create trading statistics panel - compact"""
+        """Create trading statistics panel - more compact"""
         stats = self.position_manager.stats
         
-        table = Table(title="Trading Statistics", box=box.SIMPLE)
-        table.add_column("Metric", style="cyan", width=10)
-        table.add_column("Value", style="white", width=8)
+        table = Table(title="Trading Stats", box=box.SIMPLE, show_header=False)
+        table.add_column("", style="cyan", width=8)
+        table.add_column("", style="white", width=6)
         
         table.add_row("Trades", str(stats['total_trades']))
-        table.add_row("Win Rate", f"{stats['win_rate']:.1f}%")
-        table.add_row("Total PnL", f"{stats['total_pnl']:+.2f}%")
-        table.add_row("TP1 Hits", str(stats['tp1_hits']))
-        table.add_row("TP2 Hits", str(stats['tp2_hits']))
-        table.add_row("SL Hits", str(stats['sl_hits']))
-        table.add_row("Best", f"+{stats['best_trade']:.2f}%")
-        table.add_row("P.Factor", f"{stats['profit_factor']:.2f}")
+        table.add_row("Win%", f"{stats['win_rate']:.1f}%")
+        table.add_row("PnL", f"{stats['total_pnl']:+.1f}%")
+        table.add_row("TP1", str(stats['tp1_hits']))
+        table.add_row("TP2", str(stats['tp2_hits']))
+        table.add_row("SL", str(stats['sl_hits']))
+        table.add_row("Best", f"+{stats['best_trade']:.1f}%")
+        table.add_row("PF", f"{stats['profit_factor']:.1f}")
         
         return Panel(table, style="green")
 
     def create_positions_panel(self) -> Panel:
-        """Create active positions panel - compact"""
-        table = Table(title="Active Positions", box=box.SIMPLE)
-        table.add_column("Coin", style="cyan", width=6)
-        table.add_column("Entry", style="white", width=8)
-        table.add_column("Current", style="white", width=8)
-        table.add_column("PnL%", style="white", width=7)
-        table.add_column("Status", style="white", width=8)
+        """Create active positions panel - more compact"""
+        table = Table(title="Positions", box=box.SIMPLE, show_header=False)
+        table.add_column("", style="cyan", width=5)
+        table.add_column("", style="white", width=6)
+        table.add_column("", style="white", width=5)
         
-        for symbol, position in self.position_manager.active_positions.items():
+        for symbol, position in list(self.position_manager.active_positions.items())[:5]:  # Max 5 positions
             pnl_style = "green" if position['pnl_percent'] >= 0 else "red"
-            status_style = "yellow" if position['tp1_hit'] else "white"
-            
-            # Shorter status text
-            status = position['status'].replace('TP1_HIT', 'TP1').replace('TP2_HIT', 'TP2').replace('ACTIVE', 'OPEN')
+            status = position['status'].replace('TP1_HIT', 'TP1').replace('ACTIVE', 'OPEN')[:4]
             
             table.add_row(
-                position['coin'][:6],  # Truncate long coin names
-                f"${position['entry_price']:.4f}",  # Fewer decimals
-                f"${position['current_price']:.4f}",
-                Text(f"{position['pnl_percent']:+.2f}%", style=pnl_style),
-                Text(status, style=status_style)
+                position['coin'][:5],
+                f"${position['entry_price']:.3f}",
+                Text(f"{position['pnl_percent']:+.1f}%", style=pnl_style)
             )
         
         if not self.position_manager.active_positions:
-            table.add_row("None", "", "", "", "")
+            table.add_row("None", "", "")
         
         return Panel(table, style="blue")
 
-    def create_signals_panel(self) -> Panel:
-        """Create recent signals panel - compact"""
-        table = Table(title="Recent Signals", box=box.SIMPLE)
-        table.add_column("Time", style="cyan", width=8)
-        table.add_column("Signal", style="white")
-        
-        signal_alerts = [alert for alert in self.alerts if 'SIGNAL' in alert['message']][:6]  # Show fewer
-        
-        for alert in signal_alerts:
-            # Clean up signal message
-            message = alert['message'].replace('[SIGNAL]', '').strip()
-            table.add_row(alert['time'], message[:35])  # Truncate long messages
-        
-        if not signal_alerts:
-            table.add_row("--:--:--", "Waiting for opportunities...")
-        
-        return Panel(table, style="yellow")
-
     def create_gainers_panel(self) -> Panel:
-        """Create top gainers panel - optimized for more coins"""
-        table = Table(title="Top 35 Gainers Analysis", box=box.SIMPLE)
-        table.add_column("Coin", style="cyan", width=6)
-        table.add_column("Price", style="white", width=10)
-        table.add_column("Change%", style="white", width=8)
-        table.add_column("Cond", style="white", width=5)
-        table.add_column("Status", style="white", width=12)
+        """Create top gainers panel with more compact view"""
+        table = Table(title="Top 35 Gainers", box=box.SIMPLE)
+        table.add_column("Coin", style="cyan", width=5)
+        table.add_column("Price", style="white", width=8)
+        table.add_column("Chg%", style="white", width=5)
+        table.add_column("C", style="white", width=2)
+        table.add_column("Status", style="white", width=8)
         
-        # Show more coins - top 20 for 14" screen
+        # Show top 20 gainers in compact format
         display_gainers = self.top_gainers[:20]
         
         for gainer in display_gainers:
@@ -226,72 +213,273 @@ class CryptoSignalBot:
                 conditions_met = 0
             
             change_style = "green" if gainer['change_24h'] > 0 else "red"
-            conditions_style = "green" if conditions_met == 8 else "yellow" if conditions_met >= 4 else "white"
+            conditions_style = "green" if conditions_met == 8 else "yellow" if conditions_met >= 6 else "white"
             
             if symbol == f"{self.current_scanning_symbol}USDT":
-                status = "Scanning..."
+                status = "SCAN"
                 status_style = "yellow"
             elif conditions_met == 8:
-                status = "SIGNAL READY"
+                status = "READY!"
                 status_style = "red"
             elif conditions_met >= 6:
-                status = "Near Signal"
+                status = "Near"
                 status_style = "yellow"
             else:
-                status = "Monitoring"
+                status = "Watch"
                 status_style = "white"
             
             table.add_row(
-                gainer['coin'][:6],
-                f"${gainer['price']:.6f}",
-                Text(f"{gainer['change_24h']:+.1f}%", style=change_style),
-                Text(f"{conditions_met}/8", style=conditions_style),
+                gainer['coin'][:5],
+                f"${gainer['price']:.4f}",
+                Text(f"{gainer['change_24h']:+.1f}", style=change_style),
+                Text(f"{conditions_met}", style=conditions_style),
                 Text(status, style=status_style)
             )
         
         return Panel(table, style="magenta")
 
-    def create_logs_panel(self) -> Panel:
-        """Create logs panel - compact"""
-        table = Table(title="System Logs", box=box.SIMPLE)
-        table.add_column("Time", style="cyan", width=8)
-        table.add_column("Message", style="white")
+    def create_current_scan_panel(self) -> Panel:
+        """Create current scanning coin details"""
+        if not self.current_scanning_symbol:
+            return Panel(
+                Align.center(Text("No coin being scanned", style="dim")),
+                title="Current Scan",
+                style="blue"
+            )
         
-        for alert in self.alerts[:5]:  # Show fewer logs
-            style = "green" if alert['level'] == "success" else "red" if alert['level'] == "error" else "yellow" if alert['level'] == "warning" else "white"
-            message = alert['message'][:45]  # Truncate long messages
-            table.add_row(alert['time'], Text(message, style=style))
+        symbol = f"{self.current_scanning_symbol}USDT"
+        data = self.current_data.get(symbol)
+        
+        if not data:
+            return Panel(
+                Align.center(Text(f"Scanning {self.current_scanning_symbol}...", style="yellow")),
+                title="Current Scan",
+                style="blue"
+            )
+        
+        # Create detailed info about current scan
+        table = Table(box=box.SIMPLE, show_header=False)
+        table.add_column("", style="cyan", width=8)
+        table.add_column("", style="white", width=10)
+        
+        table.add_row("Coin", self.current_scanning_symbol)
+        table.add_row("Price", f"${data.price:.6f}")
+        table.add_row("RSI 5m", f"{data.rsi_5m:.1f}")
+        table.add_row("RSI 15m", f"{data.rsi_15m:.1f}")
+        table.add_row("RSI 1h", f"{data.rsi_1h:.1f}")
+        table.add_row("Volume", f"{data.volume/data.volume_avg:.2f}x avg")
+        table.add_row("BB Dist", f"{((data.price - data.bb_lower)/data.bb_lower)*100:.2f}%")
+        
+        return Panel(table, title=f"Scanning: {self.current_scanning_symbol}", style="blue")
+
+    def create_conditions_detail_panel(self) -> Panel:
+        """Create detailed conditions breakdown for current or top coins"""
+        # Show conditions for currently scanning coin or top candidate
+        target_symbol = None
+        target_coin = None
+        
+        if self.current_scanning_symbol:
+            target_symbol = f"{self.current_scanning_symbol}USDT"
+            target_coin = self.current_scanning_symbol
+        else:
+            # Find coin with most conditions met
+            best_coin = None
+            best_conditions = 0
+            for gainer in self.top_gainers[:10]:
+                symbol = gainer['symbol']
+                data = self.current_data.get(symbol)
+                if data:
+                    conditions = self.check_strategy_conditions(data)
+                    conditions_met = sum(conditions.values())
+                    if conditions_met > best_conditions:
+                        best_conditions = conditions_met
+                        best_coin = gainer
+            
+            if best_coin:
+                target_symbol = best_coin['symbol']
+                target_coin = best_coin['coin']
+        
+        if not target_symbol or target_symbol not in self.current_data:
+            return Panel(
+                Align.center(Text("No data available", style="dim")),
+                title="Conditions Detail",
+                style="white"
+            )
+        
+        data = self.current_data[target_symbol]
+        conditions = self.check_strategy_conditions(data)
+        
+        # Create detailed conditions table
+        table = Table(title=f"{target_coin} Conditions", box=box.SIMPLE)
+        table.add_column("Condition", style="white", width=12)
+        table.add_column("Status", style="white", width=6)
+        table.add_column("Value", style="white", width=8)
+        
+        # 1. Bollinger Band Touch
+        bb_distance = ((data.price - data.bb_lower) / data.bb_lower) * 100
+        bb_style = "green" if conditions['bb_touch'] else "red"
+        table.add_row(
+            "BB Touch",
+            Text("✓" if conditions['bb_touch'] else "✗", style=bb_style),
+            f"{bb_distance:.2f}%"
+        )
+        
+        # 2. RSI 5m < 50
+        rsi_5m_style = "green" if conditions['rsi_5m'] else "red"
+        table.add_row(
+            "RSI 5m < 50",
+            Text("✓" if conditions['rsi_5m'] else "✗", style=rsi_5m_style),
+            f"{data.rsi_5m:.1f}"
+        )
+        
+        # 3. RSI 15m > 35
+        rsi_15m_style = "green" if conditions['rsi_15m'] else "red"
+        table.add_row(
+            "RSI 15m > 35",
+            Text("✓" if conditions['rsi_15m'] else "✗", style=rsi_15m_style),
+            f"{data.rsi_15m:.1f}"
+        )
+        
+        # 4. RSI 1h > 50
+        rsi_1h_style = "green" if conditions['rsi_1h'] else "red"
+        table.add_row(
+            "RSI 1h > 50",
+            Text("✓" if conditions['rsi_1h'] else "✗", style=rsi_1h_style),
+            f"{data.rsi_1h:.1f}"
+        )
+        
+        # 5. Volume Decline
+        volume_ratio = data.volume / data.volume_avg
+        volume_style = "green" if conditions['volume_decline'] else "red"
+        table.add_row(
+            "Volume Low",
+            Text("✓" if conditions['volume_decline'] else "✗", style=volume_style),
+            f"{volume_ratio:.2f}x"
+        )
+        
+        # 6. Weekly Support
+        support_distance = ((data.price - data.weekly_support) / data.weekly_support) * 100
+        support_style = "green" if conditions['weekly_support'] else "red"
+        table.add_row(
+            "Above Support",
+            Text("✓" if conditions['weekly_support'] else "✗", style=support_style),
+            f"{support_distance:.1f}%"
+        )
+        
+        # 7. EMA Stack
+        ema_style = "green" if conditions['ema_stack'] else "red"
+        price_ema_distance = ((data.price - data.ema_20_15m) / data.ema_20_15m) * 100
+        table.add_row(
+            "EMA Stack",
+            Text("✓" if conditions['ema_stack'] else "✗", style=ema_style),
+            f"{price_ema_distance:.1f}%"
+        )
+        
+        # 8. Daily Trend
+        trend_style = "green" if conditions['daily_trend'] else "red"
+        table.add_row(
+            "Daily Trend",
+            Text("✓" if conditions['daily_trend'] else "✗", style=trend_style),
+            data.btc_trend
+        )
+        
+        # Summary
+        conditions_met = sum(conditions.values())
+        summary_style = "green" if conditions_met == 8 else "yellow" if conditions_met >= 6 else "red"
+        table.add_row(
+            "TOTAL",
+            Text(f"{conditions_met}/8", style=summary_style),
+            "READY!" if conditions_met == 8 else "Near" if conditions_met >= 6 else "Wait"
+        )
+        
+        return Panel(table, style="green" if conditions_met >= 6 else "white")
+
+    def create_signals_panel(self) -> Panel:
+        """Create recent signals panel with more details"""
+        table = Table(title="Recent Signals", box=box.SIMPLE)
+        table.add_column("Time", style="cyan", width=5)
+        table.add_column("Coin", style="white", width=6)
+        table.add_column("Level", style="white", width=5)
+        table.add_column("Entry", style="white", width=8)
+        
+        signal_alerts = [alert for alert in self.alerts if 'SIGNAL' in alert['message']][:6]
+        
+        for alert in signal_alerts:
+            message_parts = alert['message'].split()
+            if len(message_parts) >= 3:
+                coin = message_parts[1] if len(message_parts) > 1 else "N/A"
+                level = message_parts[-1] if "Level" in alert['message'] else "1"
+                entry = "Active" if "ENTRY" in alert['message'] else "N/A"
+                
+                table.add_row(
+                    alert['time'][:5],
+                    coin[:6],
+                    level,
+                    entry
+                )
+        
+        if not signal_alerts:
+            table.add_row("--:--", "None", "0", "Waiting")
+        
+        return Panel(table, style="yellow")
+
+    def create_logs_panel(self) -> Panel:
+        """Create enhanced logs panel"""
+        table = Table(title="System Status", box=box.SIMPLE, show_header=False)
+        table.add_column("", style="cyan", width=5)
+        table.add_column("", style="white")
+        
+        # Show scan progress and system status
+        scan_progress = f"{self.scan_stats['total_scanned']}/35"
+        table.add_row("Scan", scan_progress)
+        table.add_row("Cycle", str(self.scan_stats['scan_cycles']))
+        table.add_row("Found", str(self.scan_stats['signals_found']))
+        
+        # Show recent important logs
+        for alert in self.alerts[:2]:
+            style = "green" if alert['level'] == "success" else "red" if alert['level'] == "error" else "yellow"
+            message = alert['message'][:15]
+            table.add_row(alert['time'][:5], Text(message, style=style))
         
         return Panel(table, style="white")
 
-    def create_footer(self) -> Panel:
-        """Create footer panel - compact"""
-        if self.current_scanning_symbol:
-            scanning_text = f"Scanning: {self.current_scanning_symbol}"
-        else:
-            scanning_text = "Scanner idle"
-        
-        footer_text = Text()
-        footer_text.append(scanning_text, style="yellow")
-        footer_text.append(" | ")
-        footer_text.append(f"Cycles: {self.scan_stats['scan_cycles']}", style="green")
-        footer_text.append(" | ")
-        footer_text.append(f"Updated: {datetime.now().strftime('%H:%M:%S')}", style="cyan")
-        footer_text.append(" | Ctrl+C to stop", style="red")
-        
-        return Panel(Align.center(footer_text), style="white")
-
     def render_dashboard(self):
-        """Render the complete dashboard"""
+        """Render the complete dashboard with detailed info"""
         self.layout["header"].update(self.create_header())
         self.layout["stats"].update(self.create_stats_panel())
         self.layout["positions"].update(self.create_positions_panel())
         self.layout["signals"].update(self.create_signals_panel())
         self.layout["gainers"].update(self.create_gainers_panel())
         self.layout["logs"].update(self.create_logs_panel())
+        self.layout["current_scan"].update(self.create_current_scan_panel())
+        self.layout["conditions_detail"].update(self.create_conditions_detail_panel())
         self.layout["footer"].update(self.create_footer())
         
         return self.layout
+
+    def create_footer(self) -> Panel:
+        """Create enhanced footer with more info"""
+        footer_text = Text()
+        
+        if self.current_scanning_symbol:
+            symbol = f"{self.current_scanning_symbol}USDT"
+            data = self.current_data.get(symbol)
+            if data:
+                conditions = self.check_strategy_conditions(data)
+                conditions_met = sum(conditions.values())
+                footer_text.append(f"Scanning: {self.current_scanning_symbol} ({conditions_met}/8) | ", style="yellow")
+            else:
+                footer_text.append(f"Scanning: {self.current_scanning_symbol} | ", style="yellow")
+        else:
+            footer_text.append("Scanner idle | ", style="dim")
+        
+        footer_text.append(f"Cycle: {self.scan_stats['scan_cycles']} | ", style="green")
+        footer_text.append(f"Scanned: {self.scan_stats['total_scanned']}/35 | ", style="cyan")
+        footer_text.append(f"Signals: {self.scan_stats['signals_found']} | ", style="magenta")
+        footer_text.append(f"{datetime.now().strftime('%H:%M:%S')} | ", style="white")
+        footer_text.append("Ctrl+C to stop", style="red")
+        
+        return Panel(Align.center(footer_text), style="blue")
 
     def get_top_gainers(self) -> List[Dict]:
         """Fetch top 35 daily gainers from Binance"""
