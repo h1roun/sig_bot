@@ -115,8 +115,10 @@ class CryptoSignalBot:
             Layout(name="logs", ratio=1)
         )
         
-        # Right column: Gainers
-        self.layout["right"].update(Layout(name="gainers"))
+        # Right column: Just gainers (fix the assignment)
+        self.layout["right"].split_column(
+            Layout(name="gainers")
+        )
         
         # Details column: Condition breakdown
         self.layout["details"].split_column(
