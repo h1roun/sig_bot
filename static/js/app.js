@@ -6,9 +6,21 @@ let currentFilter = 'all';
 // Initialize app
 function initApp() {
     console.log('🚀 Initializing app...');
-    loadGainersData();
+    
+    // Load initial data
+    loadGainersData().then(() => {
+        console.log('✅ Initial data loaded');
+    }).catch(error => {
+        console.error('❌ Failed to load initial data:', error);
+    });
+    
+    // Start periodic updates
     startUpdates();
+    
+    // Initialize filters
     initializeFilters();
+    
+    console.log('✅ App initialization complete');
 }
 
 function startBot() {
@@ -163,7 +175,7 @@ function renderGainersGrid(data = gainersData) {
                 <div class="condition-row ${conditions.rsi_5m ? 'met' : 'not-met'}">
                     <div class="condition-indicator"></div>
                     <div class="condition-info">
-                        <span class="condition-name">RSI 5m < 30</span>
+                        <span class="condition-name">RSI 5m < 50</span>
                         <span class="condition-desc">${scanData.rsi_5m ? scanData.rsi_5m.toFixed(1) : '--'}</span>
                     </div>
                 </div>
@@ -225,6 +237,19 @@ function renderGainersGrid(data = gainersData) {
                     <span>${conditionsMet}/8 conditions met</span>
                     <span>${conditionsMet === 8 ? '🚨 Signal!' : formatPrice(gainer.volume_usdt, true)}</span>
                 </div>
+                
+                ${scanData.atr_value ? `
+                <div class="strategy-indicators">
+                    <div class="indicator-row">
+                        <span class="indicator-label">ATR:</span>
+                        <span class="indicator-value">${scanData.atr_value.toFixed(6)}</span>
+                    </div>
+                    <div class="indicator-row">
+                        <span class="indicator-label">Bid/Ask:</span>
+                        <span class="indicator-value ${scanData.order_book_imbalance >= 1.3 ? 'good' : 'poor'}">${scanData.order_book_imbalance ? scanData.order_book_imbalance.toFixed(2) : '--'}:1</span>
+                    </div>
+                </div>
+                ` : ''}
             </div>
         `;
         
@@ -417,6 +442,9 @@ function updatePositionsPanel(positions) {
     const activePositions = positions.active_positions || [];
     positionCount.textContent = activePositions.length;
     
+    // Update trading statistics
+    updateTradingStats(positions.statistics || {});
+    
     if (activePositions.length === 0) {
         positionsStream.innerHTML = `
             <div class="empty-positions">
@@ -435,6 +463,9 @@ function updatePositionsPanel(positions) {
         
         positionCard.className = `position-card ${pnlClass}`;
         
+        // Calculate position progress (based on remaining size)
+        const progressPercent = 100 - position.remaining_size;
+        
         positionCard.innerHTML = `
             <button class="position-close-btn" onclick="closePosition('${position.symbol}')">✕</button>
             <div class="position-header">
@@ -444,11 +475,20 @@ function updatePositionsPanel(positions) {
             <div class="position-details">
                 <div>Entry: $${position.entry_price.toFixed(6)}</div>
                 <div>Current: $${position.current_price.toFixed(6)}</div>
-                <div>Time: ${position.entry_time}</div>
-                <div>${position.tp1_hit ? '🎯 TP1 Hit' : 'Monitoring'}</div>
+                <div>Duration: ${position.duration}</div>
+                <div>Size: ${position.remaining_size}%</div>
+                ${position.tp1_hit ? '<div>🎯 TP1 Hit</div>' : '<div>Monitoring</div>'}
+                ${position.realized_pnl > 0 ? `<div>Banked: +${position.realized_pnl.toFixed(2)}%</div>` : '<div></div>'}
             </div>
             <div class="position-pnl ${pnlClass}">
                 ${position.pnl_percent >= 0 ? '+' : ''}${position.pnl_percent.toFixed(2)}%
+                ${position.realized_pnl > 0 ? `<br><small>+${position.realized_pnl.toFixed(2)}% banked</small>` : ''}
+            </div>
+            <div class="position-progress">
+                <div class="position-progress-bar">
+                    <div class="position-progress-fill" style="width: ${progressPercent}%"></div>
+                </div>
+                <div class="position-progress-text">${progressPercent}% taken profit</div>
             </div>
         `;
         
@@ -456,30 +496,32 @@ function updatePositionsPanel(positions) {
     });
 }
 
-function closePosition(symbol) {
-    if (!confirm(`Close position for ${symbol.replace('USDT', '')}?`)) {
-        return;
-    }
+function updateTradingStats(stats) {
+    // Update main stats
+    document.getElementById('totalTrades').textContent = stats.total_trades || 0;
+    document.getElementById('winRate').textContent = `${(stats.win_rate || 0).toFixed(1)}%`;
     
-    fetch('/api/close-position', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ symbol: symbol })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.status === 'success') {
-            console.log('Position closed:', symbol);
-            updateStatus(); // Refresh positions
-        } else {
-            console.error('Failed to close position:', data.message);
-        }
-    })
-    .catch(error => {
-        console.error('Error closing position:', error);
-    });
+    const totalPnLElement = document.getElementById('totalPnL');
+    const totalPnL = stats.total_pnl || 0;
+    totalPnLElement.textContent = `${totalPnL >= 0 ? '+' : ''}${totalPnL.toFixed(2)}%`;
+    totalPnLElement.className = `stat-value ${totalPnL >= 0 ? 'success' : 'danger'}`;
+    
+    document.getElementById('tp1Hits').textContent = stats.tp1_hits || 0;
+    document.getElementById('tp2Hits').textContent = stats.tp2_hits || 0;
+    document.getElementById('slHits').textContent = stats.sl_hits || 0;
+    document.getElementById('breakevenExits').textContent = stats.breakeven_exits || 0;
+    
+    // Update advanced stats
+    const bestTrade = stats.best_trade || 0;
+    document.getElementById('bestTrade').textContent = `+${bestTrade.toFixed(2)}%`;
+    
+    const worstTrade = stats.worst_trade || 0;
+    document.getElementById('worstTrade').textContent = `${worstTrade.toFixed(2)}%`;
+    
+    const profitFactor = stats.profit_factor || 0;
+    const profitFactorElement = document.getElementById('profitFactor');
+    profitFactorElement.textContent = profitFactor === Infinity ? '∞' : profitFactor.toFixed(2);
+    profitFactorElement.className = `value ${profitFactor >= 1.5 ? 'success' : profitFactor >= 1.0 ? 'warning' : 'danger'}`;
 }
 
 function testTelegram() {
@@ -553,6 +595,116 @@ function showNotification(title, message, type = 'info') {
     }, 5000);
 }
 
+function startUpdates() {
+    // Start status updates every 3 seconds
+    updateInterval = setInterval(updateStatus, 3000);
+    console.log('✅ Started status updates');
+}
+
+function stopUpdates() {
+    if (updateInterval) {
+        clearInterval(updateInterval);
+        console.log('⏹️ Stopped status updates');
+    }
+}
+
+function refreshData() {
+    console.log('🔄 Refreshing data...');
+    loadGainersData();
+    updateStatus();
+}
+
+function stopBot() {
+    const stopBtn = document.getElementById('stopBtn');
+    stopBtn.classList.add('loading');
+    
+    fetch('/api/stop', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            console.log('Scanner stopped');
+            updateBotStatus(false);
+            stopBtn.classList.remove('loading');
+        })
+        .catch(error => {
+            console.error('Error stopping bot:', error);
+            stopBtn.classList.remove('loading');
+        });
+}
+
+function updateScanningProgress(currentCoin) {
+    const scanningProgress = document.getElementById('scanningProgress');
+    const currentScanningCoin = document.getElementById('currentScanningCoin');
+    
+    if (currentCoin) {
+        // Show scanning progress
+        scanningProgress.style.display = 'block';
+        currentScanningCoin.textContent = currentCoin;
+        console.log(`🔍 Currently scanning: ${currentCoin}`);
+    } else {
+        // Hide scanning progress when not scanning
+        scanningProgress.style.display = 'none';
+    }
+}
+
+function updateSignalsPanel(alerts) {
+    const signalsStream = document.getElementById('signalsStream');
+    const signalCount = document.getElementById('signalCount');
+    
+    // Update signal count
+    const signalAlerts = alerts.filter(alert => alert.type === 'SIGNAL');
+    signalCount.textContent = signalAlerts.length;
+    
+    if (alerts.length === 0) {
+        signalsStream.innerHTML = `
+            <div class="empty-signals">
+                <div class="empty-icon">📡</div>
+                <p>Waiting for trading signals...</p>
+            </div>
+        `;
+        return;
+    }
+    
+    signalsStream.innerHTML = '';
+    alerts.forEach(alert => {
+        const signalCard = document.createElement('div');
+        signalCard.className = 'signal-card';
+        
+        let cardClass = 'signal-card';
+        if (alert.type === 'SIGNAL') cardClass += ' signal-active';
+        if (alert.type === 'TEST') cardClass += ' signal-test';
+        
+        signalCard.className = cardClass;
+        signalCard.innerHTML = `
+            <div class="signal-header">
+                <div class="signal-coin">${getSignalIcon(alert.type)} ${alert.message}</div>
+                <div class="signal-time">${alert.time}</div>
+            </div>
+            <div class="signal-details">${alert.details}</div>
+        `;
+        
+        signalsStream.appendChild(signalCard);
+    });
+}
+
+function getSignalIcon(type) {
+    switch(type) {
+        case 'SIGNAL': return '🚨';
+        case 'TEST': return '🧪';
+        case 'INFO': return 'ℹ️';
+        default: return '📢';
+    }
+}
+
+function showCoinDetails(gainer, scanData) {
+    console.log('Coin details:', gainer.coin, scanData);
+    // Could implement a modal or detailed view here
+}
+
+function renderFilteredGainers(filteredData) {
+    renderGainersGrid(filteredData);
+    updateSectionStats(filteredData);
+}
+
 // Event listeners and initialization
 document.addEventListener('DOMContentLoaded', function() {
     const searchInput = document.getElementById('searchInput');
@@ -573,49 +725,37 @@ document.addEventListener('DOMContentLoaded', function() {
 // Auto-start when page loads
 window.onload = function() {
     console.log('🌐 Page loaded, initializing...');
-    setTimeout(() => {
-        console.log('🚀 Auto-starting bot...');
-        startBot();
-    }, 2000);
+    // Don't auto-start the bot, let user click start button
+    console.log('💡 Click "Start Scanner" to begin');
 };
 
-// Add debug function to window for testing
-window.debugGainersData = function debugGainersData() {
-    console.log('Scanning Data:', scanningData);
-    console.log('Current Filter:', currentFilter);
+// Cleanup on page unload
+window.onbeforeunload = function() {
+    stopUpdates();
 };
 
-// The DOMContentLoaded event handler is already defined above,
-// no need for duplicate event listeners here
-
-// Event listeners and initialization
-document.addEventListener('DOMContentLoaded', function() {
-    const searchInput = document.getElementById('searchInput');
-    if (searchInput) {
-        searchInput.addEventListener('input', function(e) {
-            const searchTerm = e.target.value.toLowerCase();
-            const filteredGainers = gainersData.filter(gainer => 
-                gainer.coin.toLowerCase().includes(searchTerm)
-            );
-            renderFilteredGainers(filteredGainers);
-        });
+function closePosition(symbol) {
+    if (!confirm(`Close position for ${symbol.replace('USDT', '')}?`)) {
+        return;
     }
     
-    // Initialize app
-    initApp();
-});
-
-// Auto-start when page loads
-window.onload = function() {
-    console.log('🌐 Page loaded, initializing...');
-    setTimeout(() => {
-        console.log('🚀 Auto-starting bot...');
-        startBot();
-    }, 2000);
-};
-
-// Add debug function to window for testing
-window.debugGainersData = debugGainersData;
-
-// The DOMContentLoaded event handler is already defined above,
-// no need for duplicate event listeners here
+    fetch('/api/close-position', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ symbol: symbol })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            console.log('Position closed:', symbol);
+            updateStatus(); // Refresh positions
+        } else {
+            console.error('Failed to close position:', data.message);
+        }
+    })
+    .catch(error => {
+        console.error('Error closing position:', error);
+    });
+}

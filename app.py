@@ -51,7 +51,7 @@ class SolanaSignalBot:
         self.current_scanning_symbol = None  # Add this line
         
         # Initialize scanning symbols
-        self.scanning_symbols = [coin['symbol'] for coin in self.top_gainers[:50]]  # Scan all top 50 for better coverage
+        self.scanning_symbols = [coin['symbol'] for coin in self.top_gainers[:25]]  # Scan top 25 for better focus
 
         # Initialize Telegram and Position Manager
         try:
@@ -67,19 +67,23 @@ class SolanaSignalBot:
         self.position_manager = PositionManager(self.telegram_notifier)
 
     def get_top_gainers(self) -> List[Dict]:
-        """Fetch top 50 daily gainers from Binance with improved filtering"""
+        """Fetch top 25 daily gainers from Binance - simple percentage based"""
         try:
-            print("🔍 Fetching Binance market data...")
             url = "https://api.binance.com/api/v3/ticker/24hr"
             response = requests.get(url, headers=self.headers, timeout=15)
             response.raise_for_status()
             
             all_tickers = response.json()
-            print(f"📊 Received {len(all_tickers)} tickers from Binance")
             
-            # Filter USDT pairs and apply quality filters
+            # Filter USDT pairs and apply basic filters only
             filtered_tickers = []
-            skip_coins = ['USDC', 'BUSD', 'TUSD', 'USDP', 'FDUSD', 'USDT', 'DAI']
+            # Skip only stable coins
+            skip_coins = [
+                'USDC', 'BUSD', 'TUSD', 'USDP', 'FDUSD', 'USDT', 'DAI', 
+                'PAXG', 'PAX', 'USDK', 'SUSD', 'GUSD', 'HUSD', 'USDN',
+                'UST', 'FRAX', 'LUSD', 'TRIBE', 'FEI', 'ALUSD', 'CUSD',
+                'GOLD', 'XAUT'  # Gold-pegged tokens
+            ]
             
             for ticker in all_tickers:
                 symbol = ticker['symbol']
@@ -88,26 +92,23 @@ class SolanaSignalBot:
                 if not symbol.endswith('USDT'):
                     continue
                     
-                # Skip stablecoins
+                # Skip stablecoins only
                 symbol_base = symbol.replace('USDT', '')
                 if any(stable in symbol_base for stable in skip_coins):
                     continue
                 
                 try:
-                    # Parse values
+                    # Parse values - minimal filtering
                     price = float(ticker['lastPrice'])
                     volume = float(ticker['volume'])
                     quote_volume = float(ticker['quoteVolume'])
                     change_percent = float(ticker['priceChangePercent'])
                     trades = int(ticker['count'])
                     
-                    # Quality filters - Make them less restrictive to get 50 coins
-                    if (price > 0.0001 and          # Min price
-                        volume > 100 and            # Reduced min volume
-                        quote_volume > 10000 and    # Reduced min quote volume ($10k)
-                        change_percent > -90 and    # Not completely crashed
-                        change_percent < 2000 and   # Not suspicious pump
-                        trades > 50):               # Reduced minimum trading activity
+                    # Very basic filters - just ensure valid data
+                    if (price > 0.00001 and              # Just valid price
+                        change_percent > -95 and         # Not completely dead
+                        change_percent < 5000):          # Not obvious error
                         
                         filtered_tickers.append({
                             'symbol': symbol,
@@ -124,45 +125,13 @@ class SolanaSignalBot:
                 except (ValueError, KeyError) as e:
                     continue
             
-            # Sort by 24h percentage change (descending) and take top 50
-            top_gainers = sorted(filtered_tickers, key=lambda x: x['change_24h'], reverse=True)[:50]
-            
-            print(f"✅ Found {len(top_gainers)} quality gainers")
-            
-            # Ensure we have at least some data
-            if len(top_gainers) < 10:
-                print("⚠️ Warning: Found less than 10 gainers, relaxing filters...")
-                # Fallback with even more relaxed filters
-                fallback_tickers = []
-                for ticker in all_tickers:
-                    symbol = ticker['symbol']
-                    if symbol.endswith('USDT') and not any(stable in symbol.replace('USDT', '') for stable in skip_coins):
-                        try:
-                            price = float(ticker['lastPrice'])
-                            change_percent = float(ticker['priceChangePercent'])
-                            if price > 0.0001 and change_percent > 0:  # Just positive change
-                                fallback_tickers.append({
-                                    'symbol': symbol,
-                                    'coin': symbol.replace('USDT', ''),
-                                    'price': price,
-                                    'change_24h': change_percent,
-                                    'volume': float(ticker['volume']),
-                                    'volume_usdt': float(ticker['quoteVolume']),
-                                    'high_24h': float(ticker['highPrice']),
-                                    'low_24h': float(ticker['lowPrice']),
-                                    'trades': int(ticker['count'])
-                                })
-                        except (ValueError, KeyError):
-                            continue
-                
-                top_gainers = sorted(fallback_tickers, key=lambda x: x['change_24h'], reverse=True)[:50]
-                print(f"✅ Fallback: Found {len(top_gainers)} gainers")
+            # Sort by 24h percentage change (descending) and take top 25
+            top_gainers = sorted(filtered_tickers, key=lambda x: x['change_24h'], reverse=True)[:25]
             
             return top_gainers
             
         except Exception as e:
-            print(f"❌ Error fetching top gainers: {e}")
-            # Return some dummy data for testing if API fails
+            print(f"❌ Error fetching gainers: {e}")
             return self.get_dummy_gainers()
     
     def get_dummy_gainers(self) -> List[Dict]:
@@ -282,8 +251,8 @@ class SolanaSignalBot:
         bb_touch_threshold = data.bb_lower * 1.005  # Within 0.5% of lower BB
         conditions['bb_touch'] = data.price <= bb_touch_threshold
         
-        # 2. PRIMARY SIGNAL: RSI(7) < 30 on 5min (main entry trigger) - UPDATED
-        conditions['rsi_5m'] = data.rsi_5m < 30
+        # 2. PRIMARY SIGNAL: RSI(7) < 50 on 5min (main entry trigger) - UPDATED FOR TESTING
+        conditions['rsi_5m'] = data.rsi_5m < 50
         
         # 3. CONFIRMATION: RSI(7) > 35 on 15min (trend still up)
         conditions['rsi_15m'] = data.rsi_15m > 35
@@ -313,7 +282,7 @@ class SolanaSignalBot:
         base_confidence = 70 if all(conditions.values()) else 0
         
         # Bonus factors - updated for new RSI threshold
-        if data.rsi_5m < 30:  # Updated from 20 to 30
+        if data.rsi_5m < 50:  # Updated from 30 to 50 for testing
             base_confidence += 10
         if data.volume < data.volume_avg * 0.8:
             base_confidence += 5
@@ -342,11 +311,92 @@ class SolanaSignalBot:
         sizes = {1: "50%", 2: "25%", 3: "25%"}
         return sizes.get(entry_level, "50%")
 
+    def get_order_book_imbalance(self, symbol: str) -> Optional[float]:
+        """Get order book imbalance ratio using bid/ask depth"""
+        try:
+            # Get order book depth from Binance
+            url = "https://api.binance.com/api/v3/depth"
+            params = {
+                'symbol': symbol,
+                'limit': 100  # Top 100 bid/ask levels
+            }
+            response = requests.get(url, params=params, timeout=5)
+            
+            if response.status_code == 200:
+                depth_data = response.json()
+                
+                # Calculate total bid and ask volumes
+                total_bid_volume = 0
+                total_ask_volume = 0
+                
+                # Sum up bid volumes (buyers)
+                for bid in depth_data['bids']:
+                    price = float(bid[0])
+                    quantity = float(bid[1])
+                    total_bid_volume += quantity
+                
+                # Sum up ask volumes (sellers)
+                for ask in depth_data['asks']:
+                    price = float(ask[0])
+                    quantity = float(ask[1])
+                    total_ask_volume += quantity
+                
+                # Calculate imbalance ratio (bid volume : ask volume)
+                if total_ask_volume > 0:
+                    imbalance_ratio = total_bid_volume / total_ask_volume
+                    return imbalance_ratio
+                else:
+                    return float('inf')  # All bids, no asks
+                    
+            else:
+                return None
+            
+        except Exception as e:
+            return None
+
+    def calculate_atr_levels(self, data: Dict[str, pd.DataFrame], entry_price: float) -> Dict[str, float]:
+        """Calculate ATR-based stop loss and take profit levels"""
+        try:
+            # Calculate 5m ATR(14)
+            df_5m = data['5m'].copy()
+            
+            # Calculate True Range
+            df_5m['high_low'] = df_5m['high'] - df_5m['low']
+            df_5m['high_close_prev'] = abs(df_5m['high'] - df_5m['close'].shift(1))
+            df_5m['low_close_prev'] = abs(df_5m['low'] - df_5m['close'].shift(1))
+            
+            df_5m['true_range'] = df_5m[['high_low', 'high_close_prev', 'low_close_prev']].max(axis=1)
+            
+            # Calculate ATR(14)
+            atr_14 = df_5m['true_range'].rolling(window=14).mean().iloc[-1]
+            
+            # ATR-based levels
+            atr_stop_loss = entry_price - (0.8 * atr_14)
+            atr_tp1 = entry_price + (1.0 * atr_14)
+            atr_tp2 = entry_price + (1.8 * atr_14)
+            
+            return {
+                'atr': atr_14,
+                'stop_loss': atr_stop_loss,
+                'tp1': atr_tp1,
+                'tp2': atr_tp2
+            }
+            
+        except Exception as e:
+            print(f"❌ Error calculating ATR levels: {e}")
+            # Fallback to fixed percentages
+            return {
+                'atr': 0,
+                'stop_loss': entry_price * 0.99,   # -1%
+                'tp1': entry_price * 1.008,        # +0.8%
+                'tp2': entry_price * 1.015         # +1.5%
+            }
+
     def check_entry_signals_multi(self, symbol: str, data: MarketData, conditions: Dict[str, bool]) -> Optional[Dict]:
-        """Check for entry signals for multi-symbol scanning - Only generate when ALL 8 conditions met"""
+        """Check for entry signals with Order-Book Imbalance Filter and ATR-based levels"""
         all_conditions_met = all(conditions.values())
         
-        # Only generate signal if ALL 8 conditions are met
+        # Only proceed if ALL 8 conditions are met
         if not all_conditions_met:
             return None
         
@@ -361,21 +411,37 @@ class SolanaSignalBot:
             
         # Check max positions limit
         if len(self.position_manager.get_active_symbols()) >= config.MAX_CONCURRENT_POSITIONS:
-            print(f"⚠️ Max positions ({config.MAX_CONCURRENT_POSITIONS}) reached, skipping {symbol}")
             return None
-            
-        # Determine entry level - updated thresholds
+        
+        # Order-Book Imbalance Filter
+        imbalance_ratio = self.get_order_book_imbalance(symbol)
+        
+        if imbalance_ratio is None or imbalance_ratio < 1.3:
+            return None
+
+        # Determine entry level
         entry_level = 1
-        if data.rsi_5m < 25:  # Updated from 15 to 25
+        if data.rsi_5m < 40:
             entry_level = 3
-        elif data.price <= data.bb_lower * 1.002:  # Very close to BB
+        elif data.price <= data.bb_lower * 1.002:
             entry_level = 2
         
-        # Calculate entry price and targets with updated percentages
+        # Get fresh market data for ATR calculation
+        market_data = self.get_binance_data(symbol)
+        if not market_data or '5m' not in market_data:
+            return None
+        
+        # Calculate entry price
         entry_price = data.price
-        tp1 = entry_price * (1 + config.TAKE_PROFIT_1_PERCENTAGE / 100)  # +0.8%
-        tp2 = entry_price * (1 + config.TAKE_PROFIT_2_PERCENTAGE / 100)  # +1.5%
-        stop_loss = entry_price * (1 - config.STOP_LOSS_PERCENTAGE / 100)  # -1.0%
+        
+        # ATR-Scaled SL/TP Levels
+        atr_levels = self.calculate_atr_levels(market_data, entry_price)
+        
+        # Use ATR levels instead of fixed percentages
+        tp1 = atr_levels['tp1']
+        tp2 = atr_levels['tp2']
+        stop_loss = atr_levels['stop_loss']
+        atr_value = atr_levels['atr']
             
         signal = {
             'type': 'LONG_ENTRY',
@@ -391,7 +457,10 @@ class SolanaSignalBot:
             'rsi_1h': data.rsi_1h,
             'position_size': self.get_position_size(entry_level),
             'confidence': self.calculate_confidence(data, conditions),
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'atr_value': atr_value,
+            'order_book_imbalance': imbalance_ratio,
+            'strategy_version': 'v2_atr_orderbook'
         }
         
         # Add position to manager
@@ -407,15 +476,15 @@ class SolanaSignalBot:
         return signal
 
     def run_scanner(self):
-        """Main scanning loop - REAL process explained"""
+        """Main scanning loop"""
         while self.running:
             try:
-                # STEP 1: Get fresh top 50 gainers every 5 minutes
+                # Get fresh top 25 gainers
                 if not self.top_gainers or len(self.current_data) == 0:
-                    print("🔄 STEP 1: Getting fresh top 50 gainers...")
+                    print("🔄 Getting fresh top 25 gainers...")
                     self.top_gainers = self.get_top_gainers()
-                    self.scanning_symbols = [coin['symbol'] for coin in self.top_gainers[:50]]
-                    print(f"📊 Got {len(self.scanning_symbols)} coins to scan")
+                    self.scanning_symbols = [coin['symbol'] for coin in self.top_gainers[:25]]
+                    print(f"📊 Scanning {len(self.scanning_symbols)} top gainers")
                 
                 if not self.scanning_symbols:
                     print("⚠️ No symbols to scan, waiting...")
@@ -426,44 +495,36 @@ class SolanaSignalBot:
                 active_positions = self.position_manager.get_active_symbols()
                 available_symbols = [s for s in self.scanning_symbols if s not in active_positions]
                 
-                if active_positions:
-                    print(f"📍 Skipping {len(active_positions)} symbols in active positions: {[s.replace('USDT', '') for s in active_positions]}")
-                
                 signals_found = 0
                 scanned_count = 0
                 
-                # STEP 2: Scan each available coin one by one for technical analysis
+                # Scan each available coin
                 for symbol in available_symbols:
                     try:
                         # Show current scanning coin in UI
                         self.current_scanning_symbol = symbol.replace('USDT', '')
-                        print(f"🔍 STEP 2: Analyzing {symbol}... ({scanned_count + 1}/{len(available_symbols)})")
                         
-                        # STEP 3: Get real market data from Binance
+                        # Get real market data from Binance
                         market_data = self.get_binance_data(symbol)
                         
                         if not market_data or '5m' not in market_data:
-                            print(f"⚠️ No market data for {symbol}")
                             continue
                             
-                        # STEP 4: Calculate technical indicators (RSI, BB, EMA, etc.)
+                        # Calculate technical indicators
                         current_data = self.calculate_indicators(market_data)
                         
                         if not current_data:
-                            print(f"⚠️ Failed to calculate indicators for {symbol}")
                             continue
                         
-                        # STEP 5: Store the analyzed data
+                        # Store the analyzed data
                         self.current_data[symbol] = current_data
                         scanned_count += 1
                         
-                        # STEP 6: Check all 8 trading conditions
+                        # Check all 8 trading conditions
                         conditions = self.check_strategy_conditions(current_data)
                         conditions_met = sum(conditions.values())
                         
-                        print(f"📊 {symbol}: {conditions_met}/8 conditions met")
-                        
-                        # STEP 7: If ALL 8 conditions met = GENERATE SIGNAL
+                        # If ALL 8 conditions met = GENERATE SIGNAL
                         signal = self.check_entry_signals_multi(symbol, current_data, conditions)
                         
                         if signal:
@@ -473,7 +534,7 @@ class SolanaSignalBot:
                             details = f"Entry: ${signal['entry_price']:.6f} | TP1: ${signal['tp1']:.6f} | TP2: ${signal['tp2']:.6f} | SL: ${signal['stop_loss']:.6f}"
                             self.add_alert('SIGNAL', message, details)
                             
-                            print(f"🚨 SIGNAL GENERATED for {coin_name}!")
+                            print(f"🚨 SIGNAL: {coin_name} - ATR: {signal['atr_value']:.6f} - Bid/Ask: {signal['order_book_imbalance']:.2f}")
                             
                             # Save signal to file
                             with open('signals.json', 'a') as f:
@@ -483,16 +544,14 @@ class SolanaSignalBot:
                         time.sleep(0.8)
                         
                     except Exception as e:
-                        print(f"❌ Error scanning {symbol}: {e}")
                         continue
                 
-                # STEP 8: Complete scan cycle
+                # Complete scan cycle
                 self.current_scanning_symbol = None
-                print(f"✅ SCAN COMPLETE: {scanned_count} coins analyzed, {signals_found} signals generated")
-                print(f"📍 Active positions: {len(active_positions)}")
+                if signals_found > 0:
+                    print(f"✅ Scan complete: {signals_found} signals from {scanned_count} coins")
                 
-                # STEP 9: Wait before next full scan cycle
-                print("⏳ Waiting 20 seconds before next scan cycle...")
+                # Wait before next scan cycle
                 time.sleep(20)
                 
             except Exception as e:
@@ -567,6 +626,15 @@ class SolanaSignalBot:
         """Set the selected symbol for scanning"""
         self.selected_symbol = symbol
         print(f"Selected symbol set to: {symbol}")
+    
+    def start(self):
+        """Start the bot"""
+        if not self.running:
+            self.running = True
+            scanner_thread = threading.Thread(target=self.run_scanner, daemon=True)
+            scanner_thread.start()
+            self.add_alert('INFO', '🚀 Multi-Scanner Started', 'Now scanning TOP 50 gainers simultaneously for LONG entries')
+            print("✅ Bot started successfully")
 
 # Global bot instance
 signal_bot = SolanaSignalBot()
@@ -587,10 +655,8 @@ def stop_bot():
 
 @app.route('/api/gainers')
 def get_gainers():
-    """Get top 50 daily gainers"""
-    print("🌐 API: Getting gainers...")
+    """Get top 25 daily gainers"""
     gainers = signal_bot.get_top_gainers()
-    print(f"🌐 API: Returning {len(gainers)} gainers")
     return jsonify({'gainers': gainers})
 
 @app.route('/api/set-symbol', methods=['POST'])
@@ -623,7 +689,8 @@ def get_status():
         'alerts': signal_bot.alerts,
         'running': signal_bot.running,
         'top_opportunities': summary['top_opportunities'],
-        'current_scanning': summary.get('current_scanning')
+        'current_scanning': summary.get('current_scanning'),
+        'positions': summary.get('positions', {})
     })
 
 @app.route('/api/test-alert', methods=['POST'])
@@ -709,7 +776,7 @@ def test_bot():
                 'confidence': 100,
                 'timestamp': current_time.isoformat(),
                 'test': True
-            }
+            };
             
             # Add test alert to UI
             signal_bot.add_alert(
@@ -768,10 +835,20 @@ if __name__ == '__main__':
     os.makedirs('static/js', exist_ok=True)
     
     print("🚀 Starting Multi-Crypto Scanner Bot...")
-    print("📊 Real-time scanning of TOP 20 gainers simultaneously")
-    print("🎯 85-90% win rate strategy on multiple coins")
-    print("💰 Advanced opportunity detection across hot movers")
+    print("📊 Real-time scanning of TOP 25 volatile gainers")
+    print("🎯 85-90% win rate strategy on high-volume coins")
+    print("💰 Advanced opportunity detection across volatile movers")
     print("🔍 Multi-threaded scanning with smart rate limiting")
-    print("💡 Access the bot at: http://localhost:5000")
     
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # Detect environment
+    port = int(os.environ.get('PORT', 5000))
+    host = '0.0.0.0'
+    
+    if 'CODESPACE_NAME' in os.environ:
+        codespace_name = os.environ['CODESPACE_NAME']
+        print(f"🌐 Codespace detected: {codespace_name}")
+        print(f"🔗 Access at: https://{codespace_name}-{port}.preview.app.github.dev")
+    else:
+        print(f"💡 Access the bot at: http://localhost:{port}")
+    
+    app.run(debug=True, host=host, port=port, threaded=True)

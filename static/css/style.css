@@ -362,7 +362,7 @@ body {
     margin: 0 auto;
     width: 100%;
     display: grid;
-    grid-template-columns: 350px 350px 1fr;
+    grid-template-columns: 300px 350px 350px 1fr;
     gap: 24px;
 }
 
@@ -464,6 +464,25 @@ body {
     font-size: 14px;
     color: var(--text-secondary);
     line-height: 1.5;
+}
+
+.signal-card.signal-active {
+    border-left-color: var(--accent-danger);
+    animation: signalPulse 2s infinite;
+}
+
+.signal-card.signal-test {
+    border-left-color: var(--accent-warning);
+}
+
+@keyframes signalPulse {
+    0%, 100% { 
+        box-shadow: var(--shadow-sm);
+    }
+    50% { 
+        box-shadow: 0 0 20px rgba(239, 68, 68, 0.3);
+        transform: translateX(6px);
+    }
 }
 
 /* Gainers Section */
@@ -1013,7 +1032,7 @@ body {
     cursor: pointer;
 }
 
-/* Main Container - Update grid to include positions panel */
+/* Main Container - Update for 4-column layout */
 .main-container {
     flex: 1;
     padding: 24px;
@@ -1021,12 +1040,12 @@ body {
     margin: 0 auto;
     width: 100%;
     display: grid;
-    grid-template-columns: 350px 350px 1fr;
+    grid-template-columns: 300px 350px 350px 1fr;
     gap: 24px;
 }
 
-/* Positions Panel */
-.positions-panel {
+/* Trading Statistics Panel */
+.stats-panel {
     background: var(--gradient-card);
     border: 1px solid var(--border-color);
     border-radius: 16px;
@@ -1038,12 +1057,95 @@ body {
     box-shadow: var(--shadow-md);
 }
 
-.positions-stream {
-    padding: 20px;
-    max-height: 60vh;
-    overflow-y: auto;
+.stats-summary {
+    background: var(--gradient-success);
+    color: white;
+    padding: 6px 14px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 700;
+    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
 }
 
+.stats-grid {
+    padding: 20px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.stat-card {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 12px;
+    text-align: center;
+    transition: all 0.3s ease;
+}
+
+.stat-card:hover {
+    background: var(--bg-hover);
+    transform: translateY(-1px);
+}
+
+.stat-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+.stat-value {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.stat-value.success {
+    color: var(--accent-success);
+    text-shadow: 0 0 8px rgba(16, 185, 129, 0.3);
+}
+
+.stat-value.danger {
+    color: var(--accent-danger);
+    text-shadow: 0 0 8px rgba(239, 68, 68, 0.3);
+}
+
+.stat-value.warning {
+    color: var(--accent-warning);
+    text-shadow: 0 0 8px rgba(245, 158, 11, 0.3);
+}
+
+.advanced-stats {
+    padding: 0 20px 20px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-top: 1px solid var(--border-color);
+    margin-top: 0;
+    padding-top: 16px;
+}
+
+.advanced-stat {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+}
+
+.advanced-stat .label {
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.advanced-stat .value {
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+/* Enhanced Position Cards */
 .position-card {
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
@@ -1057,17 +1159,19 @@ body {
 
 .position-card.profit {
     border-left: 4px solid var(--accent-success);
+    background: linear-gradient(135deg, var(--bg-tertiary), rgba(16, 185, 129, 0.05));
 }
 
 .position-card.loss {
     border-left: 4px solid var(--accent-danger);
+    background: linear-gradient(135deg, var(--bg-tertiary), rgba(239, 68, 68, 0.05));
 }
 
 .position-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
 }
 
 .position-coin {
@@ -1077,11 +1181,12 @@ body {
 }
 
 .position-status {
-    font-size: 11px;
+    font-size: 10px;
     padding: 4px 8px;
     border-radius: 6px;
     font-weight: 600;
     text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
 .position-status.active {
@@ -1092,10 +1197,17 @@ body {
 .position-status.tp1-hit {
     background: var(--accent-success);
     color: white;
+    animation: pulse 2s infinite;
 }
 
 .position-status.tp2-hit {
     background: var(--accent-success);
+    color: white;
+    box-shadow: 0 0 15px rgba(16, 185, 129, 0.5);
+}
+
+.position-status.breakeven {
+    background: var(--accent-warning);
     color: white;
 }
 
@@ -1107,10 +1219,10 @@ body {
 .position-details {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    font-size: 12px;
+    gap: 6px;
+    font-size: 11px;
     color: var(--text-secondary);
-    margin-bottom: 8px;
+    margin-bottom: 10px;
 }
 
 .position-pnl {
@@ -1120,11 +1232,13 @@ body {
     padding: 8px;
     border-radius: 8px;
     background: var(--bg-secondary);
+    position: relative;
 }
 
 .position-pnl.profit {
     color: var(--accent-success);
     background: rgba(16, 185, 129, 0.1);
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.2);
 }
 
 .position-pnl.loss {
@@ -1132,82 +1246,68 @@ body {
     background: rgba(239, 68, 68, 0.1);
 }
 
-.position-close-btn {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    background: var(--accent-danger);
-    color: white;
-    border: none;
-    border-radius: 4px;
-    padding: 4px 6px;
-    font-size: 10px;
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.3s ease;
+.position-progress {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-color);
 }
 
-.position-card:hover .position-close-btn {
-    opacity: 1;
+.position-progress-bar {
+    width: 100%;
+    height: 4px;
+    background: var(--bg-secondary);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 4px;
 }
 
-.position-count {
+.position-progress-fill {
+    height: 100%;
     background: var(--gradient-success);
-    color: white;
-    padding: 6px 14px;
-    border-radius: 12px;
-    font-size: 12px;
-    font-weight: 700;
-    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+    border-radius: 2px;
+    transition: width 0.8s ease;
 }
 
-.empty-positions {
-    text-align: center;
-    padding: 40px 20px;
+.position-progress-text {
+    font-size: 10px;
     color: var(--text-muted);
+    text-align: center;
 }
 
-.empty-positions .empty-icon {
-    font-size: 48px;
-    margin-bottom: 16px;
-    opacity: 0.5;
+/* Update responsive for 4-column layout */
+@media (max-width: 1600px) {
+    .main-container {
+        grid-template-columns: 280px 320px 320px 1fr;
+    }
 }
 
-/* Update responsive for 3-column layout */
 @media (max-width: 1400px) {
     .main-container {
-        grid-template-columns: 300px 300px 1fr;
-    }
-}
-
-@media (max-width: 1200px) {
-    .main-container {
-        grid-template-columns: 1fr;
-        gap: 16px;
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: auto auto;
     }
     
-    .signals-panel,
-    .positions-panel {
-        position: relative;
-        top: 0;
-        max-height: 400px;
+    .stats-panel {
+        grid-column: 1 / -1;
+    }
+    
+    .gainers-section {
+        grid-column: 1 / -1;
     }
 }
 
 @media (max-width: 1024px) {
     .main-container {
         grid-template-columns: 1fr;
-        padding: 16px;
+        gap: 16px;
     }
     
-    .signals-panel {
+    .stats-panel,
+    .signals-panel,
+    .positions-panel {
         position: relative;
         top: 0;
         max-height: 400px;
-    }
-    
-    .gainers-grid {
-        max-height: none;
     }
 }
 
@@ -1355,5 +1455,51 @@ body {
     border-radius: 50%;
     border-top-color: transparent;
     animation: spin 1s linear infinite;
+}
+
+/* Strategy Indicators */
+.strategy-indicators {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    position: relative;
+    z-index: 2;
+}
+
+.indicator-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+}
+
+.indicator-row:last-child {
+    margin-bottom: 0;
+}
+
+.indicator-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.indicator-value {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.indicator-value.good {
+    color: var(--accent-success);
+    text-shadow: 0 0 4px rgba(16, 185, 129, 0.3);
+}
+
+.indicator-value.poor {
+    color: var(--accent-danger);
+    opacity: 0.8;
 }
 

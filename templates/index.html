@@ -72,6 +72,58 @@
 
         <!-- Main Content -->
         <main class="main-container">
+            <!-- Trading Statistics Panel -->
+            <div class="stats-panel">
+                <div class="panel-header-modern">
+                    <h3>📊 Trading Stats</h3>
+                    <div class="stats-summary">
+                        <span id="totalTrades">0</span> trades
+                    </div>
+                </div>
+                
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Win Rate</div>
+                        <div class="stat-value success" id="winRate">0%</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Total PnL</div>
+                        <div class="stat-value" id="totalPnL">0%</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">TP1 Hits</div>
+                        <div class="stat-value" id="tp1Hits">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">TP2 Hits</div>
+                        <div class="stat-value" id="tp2Hits">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">SL Hits</div>
+                        <div class="stat-value danger" id="slHits">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Breakeven</div>
+                        <div class="stat-value warning" id="breakevenExits">0</div>
+                    </div>
+                </div>
+                
+                <div class="advanced-stats">
+                    <div class="advanced-stat">
+                        <span class="label">Best Trade:</span>
+                        <span class="value success" id="bestTrade">0%</span>
+                    </div>
+                    <div class="advanced-stat">
+                        <span class="label">Worst Trade:</span>
+                        <span class="value danger" id="worstTrade">0%</span>
+                    </div>
+                    <div class="advanced-stat">
+                        <span class="label">Profit Factor:</span>
+                        <span class="value" id="profitFactor">0.00</span>
+                    </div>
+                </div>
+            </div>
+
             <!-- Live Signals Panel -->
             <div class="signals-panel">
                 <div class="panel-header-modern">
@@ -124,10 +176,10 @@
             <!-- Gainers Grid -->
             <div class="gainers-section">
                 <div class="section-header">
-                    <h2>Top 50 Gainers Scanner</h2>
+                    <h2>Top 25 Gainers Scanner</h2>
                     <div class="section-stats">
                         <div class="section-stat">
-                            <span class="section-stat-value" id="totalCoins">50</span>
+                            <span class="section-stat-value" id="totalCoins">25</span>
                             <span>Total Coins</span>
                         </div>
                         <div class="section-stat">
