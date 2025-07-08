@@ -650,6 +650,65 @@ class CryptoSignalBot:
                 
         return data
     
+    def get_order_book_imbalance(self, symbol: str) -> Optional[float]:
+        """Get order book imbalance ratio"""
+        try:
+            url = "https://api.binance.com/api/v3/depth"
+            params = {'symbol': symbol, 'limit': 100}
+            response = requests.get(url, params=params, timeout=5)
+            
+            if response.status_code == 200:
+                depth_data = response.json()
+                
+                total_bid_volume = sum(float(bid[1]) for bid in depth_data['bids'])
+                total_ask_volume = sum(float(ask[1]) for ask in depth_data['asks'])
+                
+                if total_ask_volume > 0:
+                    return total_bid_volume / total_ask_volume
+                else:
+                    return float('inf')
+            return None
+        except Exception:
+            return None
+
+    def calculate_atr_levels(self, data: Dict[str, pd.DataFrame], entry_price: float) -> Dict[str, float]:
+        """Calculate ATR-based levels"""
+        try:
+            df_5m = data['5m'].copy()
+            
+            # Convert to numeric to avoid Rational instance error
+            df_5m['high'] = pd.to_numeric(df_5m['high'], errors='coerce')
+            df_5m['low'] = pd.to_numeric(df_5m['low'], errors='coerce')
+            df_5m['close'] = pd.to_numeric(df_5m['close'], errors='coerce')
+            
+            # Calculate True Range components
+            df_5m['high_low'] = df_5m['high'] - df_5m['low']
+            df_5m['high_close_prev'] = abs(df_5m['high'] - df_5m['close'].shift(1))
+            df_5m['low_close_prev'] = abs(df_5m['low'] - df_5m['close'].shift(1))
+            df_5m['true_range'] = df_5m[['high_low', 'high_close_prev', 'low_close_prev']].max(axis=1)
+            
+            # Calculate ATR (14-period average)
+            atr_14 = df_5m['true_range'].rolling(window=14).mean().iloc[-1]
+            
+            # Validate ATR
+            if pd.isna(atr_14) or atr_14 <= 0:
+                atr_14 = entry_price * 0.02  # 2% default
+            
+            return {
+                'atr': float(atr_14),
+                'stop_loss': float(entry_price - (0.8 * atr_14)),
+                'tp1': float(entry_price + (1.0 * atr_14)),
+                'tp2': float(entry_price + (1.8 * atr_14))
+            }
+        except Exception as e:
+            # Fallback to percentage-based levels
+            return {
+                'atr': float(entry_price * 0.02),
+                'stop_loss': float(entry_price * 0.99),
+                'tp1': float(entry_price * 1.008),
+                'tp2': float(entry_price * 1.015)
+            }
+
     def calculate_indicators(self, data: Dict[str, pd.DataFrame]) -> Optional[MarketData]:
         """Calculate all technical indicators with better error handling"""
         try:
@@ -659,6 +718,13 @@ class CryptoSignalBot:
                 if interval not in data or data[interval].empty:
                     return None
             
+            # Convert all price columns to numeric to avoid Rational instance errors
+            for interval in required_intervals:
+                df = data[interval]
+                for col in ['open', 'high', 'low', 'close', 'volume']:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+            
             current_price = float(data['5m']['close'].iloc[-1])
             
             # Validate price
@@ -667,35 +733,53 @@ class CryptoSignalBot:
             
             # RSI indicators with validation
             try:
-                rsi_5m = ta.momentum.RSIIndicator(data['5m']['close'], window=7).rsi().iloc[-1]
-                if pd.isna(rsi_5m):
-                    rsi_5m = 50.0  # Default neutral value
+                close_5m = data['5m']['close'].dropna()
+                if len(close_5m) >= 7:
+                    rsi_5m = ta.momentum.RSIIndicator(close_5m, window=7).rsi().iloc[-1]
+                    if pd.isna(rsi_5m):
+                        rsi_5m = 50.0
+                else:
+                    rsi_5m = 50.0
             except:
                 rsi_5m = 50.0
             
             try:
-                rsi_15m = ta.momentum.RSIIndicator(data['15m']['close'], window=7).rsi().iloc[-1]
-                if pd.isna(rsi_15m):
+                close_15m = data['15m']['close'].dropna()
+                if len(close_15m) >= 7:
+                    rsi_15m = ta.momentum.RSIIndicator(close_15m, window=7).rsi().iloc[-1]
+                    if pd.isna(rsi_15m):
+                        rsi_15m = 50.0
+                else:
                     rsi_15m = 50.0
             except:
                 rsi_15m = 50.0
             
             try:
-                rsi_1h = ta.momentum.RSIIndicator(data['1h']['close'], window=14).rsi().iloc[-1]
-                if pd.isna(rsi_1h):
+                close_1h = data['1h']['close'].dropna()
+                if len(close_1h) >= 14:
+                    rsi_1h = ta.momentum.RSIIndicator(close_1h, window=14).rsi().iloc[-1]
+                    if pd.isna(rsi_1h):
+                        rsi_1h = 50.0
+                else:
                     rsi_1h = 50.0
             except:
                 rsi_1h = 50.0
-        
+    
             # Enhanced Bollinger Bands with validation
             try:
-                bb_5m = ta.volatility.BollingerBands(data['5m']['close'], window=20, window_dev=2)
-                bb_lower = bb_5m.bollinger_lband().iloc[-1]
-                bb_upper = bb_5m.bollinger_hband().iloc[-1]
-                bb_middle = bb_5m.bollinger_mavg().iloc[-1]
-                
-                # Validate BB values
-                if pd.isna(bb_lower) or pd.isna(bb_upper) or pd.isna(bb_middle):
+                close_5m = data['5m']['close'].dropna()
+                if len(close_5m) >= 20:
+                    bb_5m = ta.volatility.BollingerBands(close_5m, window=20, window_dev=2)
+                    bb_lower = bb_5m.bollinger_lband().iloc[-1]
+                    bb_upper = bb_5m.bollinger_hband().iloc[-1]
+                    bb_middle = bb_5m.bollinger_mavg().iloc[-1]
+                    
+                    # Validate BB values
+                    if pd.isna(bb_lower) or pd.isna(bb_upper) or pd.isna(bb_middle):
+                        bb_lower = current_price * 0.98
+                        bb_upper = current_price * 1.02
+                        bb_middle = current_price
+                else:
                     bb_lower = current_price * 0.98
                     bb_upper = current_price * 1.02
                     bb_middle = current_price
@@ -703,14 +787,26 @@ class CryptoSignalBot:
                 bb_lower = current_price * 0.98
                 bb_upper = current_price * 1.02
                 bb_middle = current_price
-        
+    
             # EMA indicators with validation
             try:
-                ema_9_15m = ta.trend.EMAIndicator(data['15m']['close'], window=9).ema_indicator().iloc[-1]
-                ema_21_15m = ta.trend.EMAIndicator(data['15m']['close'], window=21).ema_indicator().iloc[-1]
-                ema_20_15m = ta.trend.EMAIndicator(data['15m']['close'], window=20).ema_indicator().iloc[-1]
-                ema_50_daily = ta.trend.EMAIndicator(data['1d']['close'], window=50).ema_indicator().iloc[-1]
+                close_15m = data['15m']['close'].dropna()
+                close_1d = data['1d']['close'].dropna()
                 
+                if len(close_15m) >= 21:
+                    ema_9_15m = ta.trend.EMAIndicator(close_15m, window=9).ema_indicator().iloc[-1]
+                    ema_21_15m = ta.trend.EMAIndicator(close_15m, window=21).ema_indicator().iloc[-1]
+                    ema_20_15m = ta.trend.EMAIndicator(close_15m, window=20).ema_indicator().iloc[-1]
+                else:
+                    ema_9_15m = current_price
+                    ema_21_15m = current_price
+                    ema_20_15m = current_price
+            
+                if len(close_1d) >= 50:
+                    ema_50_daily = ta.trend.EMAIndicator(close_1d, window=50).ema_indicator().iloc[-1]
+                else:
+                    ema_50_daily = current_price
+            
                 # Validate EMA values
                 if pd.isna(ema_9_15m): ema_9_15m = current_price
                 if pd.isna(ema_21_15m): ema_21_15m = current_price
@@ -721,66 +817,101 @@ class CryptoSignalBot:
                 ema_21_15m = current_price
                 ema_20_15m = current_price
                 ema_50_daily = current_price
-        
+    
             # MACD for momentum confirmation with validation
             try:
-                macd_indicator = ta.trend.MACD(data['5m']['close'], window_slow=26, window_fast=12, window_sign=9)
-                macd_5m = macd_indicator.macd().iloc[-1]
-                macd_signal_5m = macd_indicator.macd_signal().iloc[-1]
-                macd_histogram_5m = macd_indicator.macd_diff().iloc[-1]
-                
-                # Validate MACD values
-                if pd.isna(macd_5m): macd_5m = 0.0
-                if pd.isna(macd_signal_5m): macd_signal_5m = 0.0
-                if pd.isna(macd_histogram_5m): macd_histogram_5m = 0.0
+                close_5m = data['5m']['close'].dropna()
+                if len(close_5m) >= 35:  # Need at least 35 periods for MACD
+                    macd_indicator = ta.trend.MACD(close_5m, window_slow=26, window_fast=12, window_sign=9)
+                    macd_5m = macd_indicator.macd().iloc[-1]
+                    macd_signal_5m = macd_indicator.macd_signal().iloc[-1]
+                    macd_histogram_5m = macd_indicator.macd_diff().iloc[-1]
+                    
+                    # Validate MACD values
+                    if pd.isna(macd_5m): macd_5m = 0.0
+                    if pd.isna(macd_signal_5m): macd_signal_5m = 0.0
+                    if pd.isna(macd_histogram_5m): macd_histogram_5m = 0.0
+                else:
+                    macd_5m = 0.0
+                    macd_signal_5m = 0.0
+                    macd_histogram_5m = 0.0
             except:
                 macd_5m = 0.0
                 macd_signal_5m = 0.0
                 macd_histogram_5m = 0.0
-        
+    
             # Stochastic for oversold confirmation with validation
             try:
-                stoch_indicator = ta.momentum.StochasticOscillator(data['5m']['high'], data['5m']['low'], data['5m']['close'], window=14, smooth_window=3)
-                stoch_k = stoch_indicator.stoch().iloc[-1]
-                stoch_d = stoch_indicator.stoch_signal().iloc[-1]
-                
-                # Validate Stochastic values
-                if pd.isna(stoch_k): stoch_k = 50.0
-                if pd.isna(stoch_d): stoch_d = 50.0
+                if len(data['5m']) >= 17:  # Need at least 17 periods for Stochastic
+                    high_5m = data['5m']['high'].dropna()
+                    low_5m = data['5m']['low'].dropna()
+                    close_5m = data['5m']['close'].dropna()
+                    
+                    if len(high_5m) >= 17 and len(low_5m) >= 17 and len(close_5m) >= 17:
+                        stoch_indicator = ta.momentum.StochasticOscillator(high_5m, low_5m, close_5m, window=14, smooth_window=3)
+                        stoch_k = stoch_indicator.stoch().iloc[-1]
+                        stoch_d = stoch_indicator.stoch_signal().iloc[-1]
+                        
+                        # Validate Stochastic values
+                        if pd.isna(stoch_k): stoch_k = 50.0
+                        if pd.isna(stoch_d): stoch_d = 50.0
+                    else:
+                        stoch_k = 50.0
+                        stoch_d = 50.0
+                else:
+                    stoch_k = 50.0
+                    stoch_d = 50.0
             except:
                 stoch_k = 50.0
                 stoch_d = 50.0
-        
+    
             # ATR for volatility with validation
             try:
-                atr_indicator = ta.volatility.AverageTrueRange(data['5m']['high'], data['5m']['low'], data['5m']['close'], window=14)
-                atr_5m = atr_indicator.average_true_range().iloc[-1]
-                if pd.isna(atr_5m): atr_5m = current_price * 0.02  # 2% default
+                if len(data['5m']) >= 14:
+                    high_5m = data['5m']['high'].dropna()
+                    low_5m = data['5m']['low'].dropna()
+                    close_5m = data['5m']['close'].dropna()
+                    
+                    if len(high_5m) >= 14 and len(low_5m) >= 14 and len(close_5m) >= 14:
+                        atr_indicator = ta.volatility.AverageTrueRange(high_5m, low_5m, close_5m, window=14)
+                        atr_5m = atr_indicator.average_true_range().iloc[-1]
+                        if pd.isna(atr_5m): atr_5m = current_price * 0.02
+                    else:
+                        atr_5m = current_price * 0.02
             except:
                 atr_5m = current_price * 0.02
-        
+    
             # Volume analysis with validation
             try:
-                current_volume = float(data['5m']['volume'].iloc[-1])
-                volume_avg = data['5m']['volume'].rolling(20).mean().iloc[-1]
-                
-                # Validate volume values
-                if pd.isna(current_volume) or current_volume <= 0:
-                    current_volume = 1000.0  # Default volume
-                if pd.isna(volume_avg) or volume_avg <= 0:
-                    volume_avg = current_volume  # Use current as average
+                volume_5m = data['5m']['volume'].dropna()
+                if len(volume_5m) >= 20:
+                    current_volume = float(volume_5m.iloc[-1])
+                    volume_avg = volume_5m.rolling(20).mean().iloc[-1]
+                    
+                    # Validate volume values
+                    if pd.isna(current_volume) or current_volume <= 0:
+                        current_volume = 1000.0
+                    if pd.isna(volume_avg) or volume_avg <= 0:
+                        volume_avg = current_volume
+                else:
+                    current_volume = 1000.0
+                    volume_avg = 1000.0
             except:
                 current_volume = 1000.0
                 volume_avg = 1000.0
-        
+    
             # Support level with validation
             try:
-                weekly_support = data['1d']['low'].tail(7).min()
-                if pd.isna(weekly_support):
-                    weekly_support = current_price * 0.95  # 5% below current price
+                low_1d = data['1d']['low'].dropna()
+                if len(low_1d) >= 7:
+                    weekly_support = low_1d.tail(7).min()
+                    if pd.isna(weekly_support):
+                        weekly_support = current_price * 0.95
+                else:
+                    weekly_support = current_price * 0.95
             except:
                 weekly_support = current_price * 0.95
-        
+    
             # Enhanced BTC trend strength with validation
             try:
                 price_vs_ema50 = (current_price - ema_50_daily) / ema_50_daily * 100
@@ -796,56 +927,43 @@ class CryptoSignalBot:
                 price_vs_ema50 = 0.0
                 btc_strength = 0.0
                 btc_trend = "NEUTRAL"
-        
+    
             # Volatility ratio for market regime with validation
             try:
                 bb_width = (bb_upper - bb_lower) / bb_middle
-                historical_bb_width = []
+                volatility_ratio = 1.0  # Default to neutral
                 
-                for i in range(min(20, len(data['5m']) - 20)):
-                    try:
-                        subset = data['5m']['close'].iloc[-(20-i):]
-                        if len(subset) >= 20:
-                            hist_bb = ta.volatility.BollingerBands(subset, window=20, window_dev=2)
-                            hist_width = (hist_bb.bollinger_hband().iloc[-1] - hist_bb.bollinger_lband().iloc[-1]) / hist_bb.bollinger_mavg().iloc[-1]
-                            if not pd.isna(hist_width) and hist_width > 0:
-                                historical_bb_width.append(hist_width)
-                    except:
-                        continue
-            
-                avg_bb_width = np.mean(historical_bb_width) if historical_bb_width else bb_width
-                volatility_ratio = bb_width / avg_bb_width if avg_bb_width > 0 else 1.0
-                
-                # Validate volatility ratio
-                if pd.isna(volatility_ratio) or volatility_ratio <= 0:
-                    volatility_ratio = 1.0
+                # Simplified volatility calculation to avoid errors
+                if not pd.isna(bb_width) and bb_width > 0:
+                    volatility_ratio = min(max(bb_width * 50, 0.5), 3.0)  # Normalize and clamp
             except:
                 volatility_ratio = 1.0
-        
+    
+            # Ensure all values are float and not NaN
             return MarketData(
-                price=current_price,
-                rsi_5m=rsi_5m,
-                rsi_15m=rsi_15m,
-                rsi_1h=rsi_1h,
-                volume=current_volume,
-                volume_avg=volume_avg,
-                bb_lower=bb_lower,
-                bb_upper=bb_upper,
-                bb_middle=bb_middle,
-                ema_9_15m=ema_9_15m,
-                ema_21_15m=ema_21_15m,
-                ema_20_15m=ema_20_15m,
-                ema_50_daily=ema_50_daily,
-                weekly_support=weekly_support,
-                btc_trend=btc_trend,
-                macd_5m=macd_5m,
-                macd_signal_5m=macd_signal_5m,
-                macd_histogram_5m=macd_histogram_5m,
-                stoch_k=stoch_k,
-                stoch_d=stoch_d,
-                atr_5m=atr_5m,
-                volatility_ratio=volatility_ratio,
-                btc_strength=btc_strength,
+                price=float(current_price),
+                rsi_5m=float(rsi_5m),
+                rsi_15m=float(rsi_15m),
+                rsi_1h=float(rsi_1h),
+                volume=float(current_volume),
+                volume_avg=float(volume_avg),
+                bb_lower=float(bb_lower),
+                bb_upper=float(bb_upper),
+                bb_middle=float(bb_middle),
+                ema_9_15m=float(ema_9_15m),
+                ema_21_15m=float(ema_21_15m),
+                ema_20_15m=float(ema_20_15m),
+                ema_50_daily=float(ema_50_daily),
+                weekly_support=float(weekly_support),
+                btc_trend=str(btc_trend),
+                macd_5m=float(macd_5m),
+                macd_signal_5m=float(macd_signal_5m),
+                macd_histogram_5m=float(macd_histogram_5m),
+                stoch_k=float(stoch_k),
+                stoch_d=float(stoch_d),
+                atr_5m=float(atr_5m),
+                volatility_ratio=float(volatility_ratio),
+                btc_strength=float(btc_strength),
                 timestamp=datetime.now()
             )
         except Exception as e:
