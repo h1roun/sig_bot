@@ -191,120 +191,17 @@ class CryptoSignalBot:
         
         return Panel(table, style="blue")
 
-    def create_conditions_detail_panel(self) -> Panel:
-        """Create top 3 coins with detailed conditions breakdown"""
-        # Find top 3 coins with most conditions met
-        top_coins = []
-        
-        for gainer in self.top_gainers[:20]:  # Check top 20 gainers
-            symbol = gainer['symbol']
-            data = self.current_data.get(symbol)
-            if data:
-                conditions = self.check_strategy_conditions(data)
-                conditions_met = sum(conditions.values())
-                if conditions_met > 0:  # Only include coins with some conditions met
-                    top_coins.append({
-                        'coin': gainer['coin'],
-                        'symbol': symbol,
-                        'price': gainer['price'],
-                        'change': gainer['change_24h'],
-                        'conditions_met': conditions_met,
-                        'conditions': conditions,
-                        'data': data
-                    })
-        
-        # Sort by conditions met and take top 3
-        top_coins.sort(key=lambda x: x['conditions_met'], reverse=True)
-        top_3_coins = top_coins[:3]
-        
-        if not top_3_coins:
-            return Panel(
-                Align.center(Text("No conditions met yet", style="dim")),
-                title="Top Signals",
-                style="white"
-            )
-        
-        # Create a detailed table for each coin showing all conditions
-        table = Table(title="Top Trading Signals", box=box.SIMPLE)
-        table.add_column("Coin", style="cyan", width=5)
-        table.add_column("Price", style="white", width=7)
-        table.add_column("Condition", style="white", width=12)
-        table.add_column("Status", style="white", width=5)
-        
-        for coin_info in top_3_coins:
-            conditions = coin_info['conditions']
-            data = coin_info['data']
-            conditions_met = coin_info['conditions_met']
-            coin_style = "green" if conditions_met == 8 else "yellow" if conditions_met >= 6 else "white"
-            
-            # Add coin header
-            table.add_row(
-                Text(f"{coin_info['coin'][:5]}", style=coin_style), 
-                f"${coin_info['price']:.4f}",
-                f"{conditions_met}/8 met", 
-                Text("SIGNAL" if conditions_met == 8 else "WATCH", style=coin_style)
-            )
-            
-            # BB Touch condition
-            bb_distance = ((data.price - data.bb_lower) / data.bb_lower) * 100
-            bb_status = "✓" if conditions['bb_touch'] else "✗"
-            bb_style = "green" if conditions['bb_touch'] else "red"
-            table.add_row("", "", "BB Touch", Text(f"{bb_status} {bb_distance:.1f}%", style=bb_style))
-            
-            # RSI 5m condition
-            rsi_5m_status = "✓" if conditions['rsi_5m'] else "✗"
-            rsi_5m_style = "green" if conditions['rsi_5m'] else "red"
-            table.add_row("", "", "RSI 5m < 50", Text(f"{rsi_5m_status} {data.rsi_5m:.1f}", style=rsi_5m_style))
-            
-            # RSI 15m condition
-            rsi_15m_status = "✓" if conditions['rsi_15m'] else "✗"
-            rsi_15m_style = "green" if conditions['rsi_15m'] else "red"
-            table.add_row("", "", "RSI 15m > 35", Text(f"{rsi_15m_status} {data.rsi_15m:.1f}", style=rsi_15m_style))
-            
-            # RSI 1h condition
-            rsi_1h_status = "✓" if conditions['rsi_1h'] else "✗"
-            rsi_1h_style = "green" if conditions['rsi_1h'] else "red"
-            table.add_row("", "", "RSI 1h > 50", Text(f"{rsi_1h_status} {data.rsi_1h:.1f}", style=rsi_1h_style))
-            
-            # Volume condition
-            volume_ratio = data.volume / data.volume_avg
-            volume_status = "✓" if conditions['volume_decline'] else "✗"
-            volume_style = "green" if conditions['volume_decline'] else "red"
-            table.add_row("", "", "Volume Low", Text(f"{volume_status} {volume_ratio:.1f}x", style=volume_style))
-            
-            # Weekly Support
-            support_distance = ((data.price - data.weekly_support) / data.weekly_support) * 100
-            support_status = "✓" if conditions['weekly_support'] else "✗"
-            support_style = "green" if conditions['weekly_support'] else "red"
-            table.add_row("", "", "Above Support", Text(f"{support_status} {support_distance:.1f}%", style=support_style))
-            
-            # EMA Stack
-            ema_status = "✓" if conditions['ema_stack'] else "✗"
-            ema_style = "green" if conditions['ema_stack'] else "red"
-            table.add_row("", "", "EMA Stack", Text(f"{ema_status}", style=ema_style))
-            
-            # Daily Trend
-            trend_status = "✓" if conditions['daily_trend'] else "✗"
-            trend_style = "green" if conditions['daily_trend'] else "red"
-            table.add_row("", "", "Daily Trend", Text(f"{trend_status} {data.btc_trend}", style=trend_style))
-            
-            # Add separator between coins unless it's the last one
-            if coin_info != top_3_coins[-1]:
-                table.add_row("", "", "", "")
-        
-        panel_style = "green" if top_3_coins[0]['conditions_met'] == 8 else "yellow" if top_3_coins[0]['conditions_met'] >= 6 else "white"
-        return Panel(table, style=panel_style)
-
     def create_gainers_panel(self) -> Panel:
-        """Create top gainers panel with better space usage"""
+        """Create top gainers panel showing all 35 coins with better space usage"""
+        # Use more columns to fill the horizontal space
         table = Table(title="Top 35 Gainers", box=box.SIMPLE)
         table.add_column("Coin", style="cyan", width=4)
         table.add_column("Price", style="white", width=7)
         table.add_column("Chg%", style="white", width=5)
-        table.add_column("Vol(M)", style="white", width=5)  # Added volume column
         table.add_column("C", style="white", width=2)
+        table.add_column("Vol", style="white", width=5)  # Add volume column
+        table.add_column("RSI", style="white", width=4)  # Add RSI column
         table.add_column("Status", style="white", width=6)
-        table.add_column("Met", style="white", width=9)  # Added column for met conditions
         
         # Show ALL 35 gainers
         display_gainers = self.top_gainers[:35]
@@ -313,32 +210,16 @@ class CryptoSignalBot:
             symbol = gainer['symbol']
             data = self.current_data.get(symbol)
             
-            # Calculate volume in millions for better display
-            volume_in_millions = gainer['volume_usdt'] / 1000000
-            
             if data:
                 conditions = self.check_strategy_conditions(data)
                 conditions_met = sum(conditions.values())
-                
-                # Create a mini-summary of which conditions are met
-                met_indicators = []
-                if conditions['bb_touch']: met_indicators.append("BB")
-                if conditions['rsi_5m']: met_indicators.append("R5")
-                if conditions['rsi_15m']: met_indicators.append("R15")
-                if conditions['rsi_1h']: met_indicators.append("R1h")
-                if conditions['volume_decline']: met_indicators.append("Vol")
-                if conditions['weekly_support']: met_indicators.append("Sup")
-                if conditions['ema_stack']: met_indicators.append("EMA")
-                if conditions['daily_trend']: met_indicators.append("Trnd")
-                
-                # Take first few indicators to fit in column
-                met_summary = " ".join(met_indicators[:3])
-                if len(met_indicators) > 3:
-                    met_summary += "..."
-                
+                # Add volume and RSI data
+                volume_str = f"{data.volume/data.volume_avg:.1f}x" if data.volume_avg > 0 else "N/A"
+                rsi_str = f"{data.rsi_5m:.0f}" if hasattr(data, 'rsi_5m') else "N/A"
             else:
                 conditions_met = 0
-                met_summary = ""
+                volume_str = "N/A"
+                rsi_str = "N/A"
             
             change_style = "green" if gainer['change_24h'] > 0 else "red"
             conditions_style = "green" if conditions_met == 8 else "yellow" if conditions_met >= 6 else "white"
@@ -360,10 +241,10 @@ class CryptoSignalBot:
                 gainer['coin'][:4],
                 f"${gainer['price']:.3f}",
                 Text(f"{gainer['change_24h']:+.1f}", style=change_style),
-                f"{volume_in_millions:.1f}",  # Display volume in millions
                 Text(f"{conditions_met}", style=conditions_style),
-                Text(status, style=status_style),
-                Text(met_summary, style=conditions_style)
+                volume_str,  # Add volume data
+                rsi_str,     # Add RSI data
+                Text(status, style=status_style)
             )
         
         return Panel(table, style="magenta")
@@ -401,6 +282,156 @@ class CryptoSignalBot:
         table.add_row("BB Dist", f"{((data.price - data.bb_lower)/data.bb_lower)*100:.2f}%")
         
         return Panel(table, title=f"Scanning: {self.current_scanning_symbol}", style="blue")
+
+    def create_conditions_detail_panel(self) -> Panel:
+        """Create detailed top 3 coins condition panel with full space usage"""
+        # Find top 3 coins with most conditions met
+        top_coins = []
+        
+        for gainer in self.top_gainers[:20]:
+            symbol = gainer['symbol']
+            data = self.current_data.get(symbol)
+            if data:
+                conditions = self.check_strategy_conditions(data)
+                conditions_met = sum(conditions.values())
+                if conditions_met > 0:
+                    top_coins.append({
+                        'coin': gainer['coin'],
+                        'symbol': symbol,
+                        'conditions_met': conditions_met,
+                        'conditions': conditions,
+                        'data': data,
+                        'price': gainer['price'],
+                        'change': gainer['change_24h']
+                    })
+        
+        # Sort by conditions met and take top 3
+        top_coins.sort(key=lambda x: x['conditions_met'], reverse=True)
+        top_3_coins = top_coins[:3]
+        
+        if not top_3_coins:
+            return Panel(
+                Align.center(Text("No conditions met yet", style="dim")),
+                title="Top Conditions",
+                style="white"
+            )
+        
+        # Create vertical layout with one table for each coin
+        tables = []
+        
+        for coin_info in top_3_coins:
+            conditions = coin_info['conditions']
+            data = coin_info['data']
+            
+            # Create detailed table for this coin
+            coin_table = Table(
+                title=f"{coin_info['coin']} - {coin_info['conditions_met']}/8 Conditions", 
+                box=box.SIMPLE, 
+                title_style="bold cyan" if coin_info['conditions_met'] >= 6 else "cyan"
+            )
+            
+            coin_table.add_column("Condition", style="white", width=10)
+            coin_table.add_column("Status", style="white", width=3)
+            coin_table.add_column("Value", style="white", width=7)
+            coin_table.add_column("Target", style="white", width=7)
+            
+            # Price and change info
+            coin_table.add_row(
+                "Price",
+                "",
+                f"${coin_info['price']:.4f}",
+                f"{coin_info['change']:+.1f}%"
+            )
+            
+            # 1. Bollinger Band Touch
+            bb_distance = ((data.price - data.bb_lower) / data.bb_lower) * 100
+            bb_style = "green" if conditions['bb_touch'] else "red"
+            coin_table.add_row(
+                "BB Touch",
+                Text("✓" if conditions['bb_touch'] else "✗", style=bb_style),
+                f"{bb_distance:.2f}%",
+                "< 0.5%"
+            )
+            
+            # 2. RSI 5m < 50
+            rsi_5m_style = "green" if conditions['rsi_5m'] else "red"
+            coin_table.add_row(
+                "RSI 5m",
+                Text("✓" if conditions['rsi_5m'] else "✗", style=rsi_5m_style),
+                f"{data.rsi_5m:.1f}",
+                "< 50"
+            )
+            
+            # 3. RSI 15m > 35
+            rsi_15m_style = "green" if conditions['rsi_15m'] else "red"
+            coin_table.add_row(
+                "RSI 15m",
+                Text("✓" if conditions['rsi_15m'] else "✗", style=rsi_15m_style),
+                f"{data.rsi_15m:.1f}",
+                "> 35"
+            )
+            
+            # 4. RSI 1h > 50
+            rsi_1h_style = "green" if conditions['rsi_1h'] else "red"
+            coin_table.add_row(
+                "RSI 1h",
+                Text("✓" if conditions['rsi_1h'] else "✗", style=rsi_1h_style),
+                f"{data.rsi_1h:.1f}",
+                "> 50"
+            )
+            
+            # 5. Volume Decline
+            volume_ratio = data.volume / data.volume_avg
+            volume_style = "green" if conditions['volume_decline'] else "red"
+            coin_table.add_row(
+                "Volume",
+                Text("✓" if conditions['volume_decline'] else "✗", style=volume_style),
+                f"{volume_ratio:.2f}x",
+                "< 1.0x"
+            )
+            
+            # 6. Weekly Support
+            support_style = "green" if conditions['weekly_support'] else "red"
+            coin_table.add_row(
+                "Support",
+                Text("✓" if conditions['weekly_support'] else "✗", style=support_style),
+                f"${data.weekly_support:.4f}",
+                "Above"
+            )
+            
+            # 7. EMA Stack
+            ema_style = "green" if conditions['ema_stack'] else "red"
+            coin_table.add_row(
+                "EMA Stack",
+                Text("✓" if conditions['ema_stack'] else "✗", style=ema_style),
+                "Aligned" if conditions['ema_stack'] else "Misaligned",
+                "Aligned"
+            )
+            
+            # 8. Daily Trend
+            trend_style = "green" if conditions['daily_trend'] else "red"
+            coin_table.add_row(
+                "Daily Trend",
+                Text("✓" if conditions['daily_trend'] else "✗", style=trend_style),
+                data.btc_trend,
+                "UP"
+            )
+            
+            tables.append(coin_table)
+        
+        # Fill remaining slots with empty if we have less than 3 coins
+        while len(tables) < 3:
+            empty_table = Table(box=None)
+            empty_table.add_row("")
+            tables.append(empty_table)
+        
+        # Stack tables vertically
+        layout = Table.grid()
+        for table in tables:
+            layout.add_row(table)
+        
+        # Return the stacked layout inside a panel
+        return Panel(layout, title="Detailed Conditions", style="green" if top_3_coins and top_3_coins[0]['conditions_met'] >= 6 else "white")
 
     def create_signals_panel(self) -> Panel:
         """Create recent signals panel with more details"""
