@@ -88,129 +88,132 @@ class CryptoSignalBot:
         self.setup_layout()
         
     def setup_layout(self):
-        """Setup the terminal layout"""
+        """Setup the terminal layout optimized for 14" MacBook"""
         self.layout.split_column(
-            Layout(name="header", size=3),
+            Layout(name="header", size=2),  # Reduced from 3 to 2
             Layout(name="body"),
-            Layout(name="footer", size=3)
+            Layout(name="footer", size=2)   # Reduced from 3 to 2
         )
         
+        # Better ratio for 14" screen
         self.layout["body"].split_row(
-            Layout(name="left", ratio=1),
-            Layout(name="right", ratio=1)
+            Layout(name="left", ratio=2),   # Slightly wider left panel
+            Layout(name="right", ratio=3)   # Wider right panel for gainers
         )
         
         self.layout["left"].split_column(
-            Layout(name="stats", size=10),
-            Layout(name="positions", size=15),
+            Layout(name="stats", size=8),     # Reduced from 10
+            Layout(name="positions", size=12), # Reduced from 15
             Layout(name="signals")
         )
         
         self.layout["right"].split_column(
             Layout(name="gainers"),
-            Layout(name="logs", size=8)
+            Layout(name="logs", size=6)       # Reduced from 8
         )
 
     def log_message(self, message: str, level: str = "info"):
-        """Add log message with timestamp"""
+        """Add log message with timestamp - no emojis"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.alerts.insert(0, {
             'time': timestamp,
-            'message': message,
+            'message': message.replace('✅', '[OK]').replace('❌', '[ERR]').replace('⚠️', '[WARN]').replace('🔄', '[INFO]').replace('🚨', '[SIGNAL]'),
             'level': level
         })
-        # Keep only last 50 messages
-        self.alerts = self.alerts[:50]
+        # Keep only last 30 messages for smaller screen
+        self.alerts = self.alerts[:30]
 
     def create_header(self) -> Panel:
-        """Create header panel"""
-        title = Text("🚀 CRYPTO SIGNAL BOT - TERMINAL EDITION", style="bold cyan")
-        status = "🟢 ONLINE" if self.running else "🔴 OFFLINE"
+        """Create header panel - compact for 14" screen"""
+        title = "CRYPTO SIGNAL BOT - TERMINAL EDITION"
+        status = "ONLINE" if self.running else "OFFLINE"
         
         header_text = Text()
-        header_text.append(f"{title}                    ")
-        header_text.append(f"Status: {status} | ", style="bold")
-        header_text.append(f"Scanning: {len(self.scanning_symbols)} coins | ", style="green")
+        header_text.append(f"{title} | ", style="bold cyan")
+        header_text.append(f"Status: {status} | ", style="bold green" if self.running else "bold red")
+        header_text.append(f"Coins: {len(self.scanning_symbols)} | ", style="white")
         header_text.append(f"Signals: {self.scan_stats['signals_found']} | ", style="yellow")
         header_text.append(f"Positions: {len(self.position_manager.active_positions)}", style="blue")
         
         return Panel(Align.center(header_text), style="blue")
 
     def create_stats_panel(self) -> Panel:
-        """Create trading statistics panel"""
+        """Create trading statistics panel - compact"""
         stats = self.position_manager.stats
         
-        table = Table(title="📊 Trading Statistics", box=box.ROUNDED)
-        table.add_column("Metric", style="cyan")
-        table.add_column("Value", style="white")
+        table = Table(title="Trading Statistics", box=box.SIMPLE)
+        table.add_column("Metric", style="cyan", width=10)
+        table.add_column("Value", style="white", width=8)
         
-        table.add_row("Total Trades", str(stats['total_trades']))
+        table.add_row("Trades", str(stats['total_trades']))
         table.add_row("Win Rate", f"{stats['win_rate']:.1f}%")
         table.add_row("Total PnL", f"{stats['total_pnl']:+.2f}%")
         table.add_row("TP1 Hits", str(stats['tp1_hits']))
         table.add_row("TP2 Hits", str(stats['tp2_hits']))
         table.add_row("SL Hits", str(stats['sl_hits']))
-        table.add_row("Breakeven", str(stats['breakeven_exits']))
-        table.add_row("Best Trade", f"+{stats['best_trade']:.2f}%")
-        table.add_row("Profit Factor", f"{stats['profit_factor']:.2f}")
+        table.add_row("Best", f"+{stats['best_trade']:.2f}%")
+        table.add_row("P.Factor", f"{stats['profit_factor']:.2f}")
         
         return Panel(table, style="green")
 
     def create_positions_panel(self) -> Panel:
-        """Create active positions panel"""
-        table = Table(title="💼 Active Positions", box=box.ROUNDED)
-        table.add_column("Coin", style="cyan")
-        table.add_column("Entry", style="white")
-        table.add_column("Current", style="white")
-        table.add_column("PnL%", style="white")
-        table.add_column("Status", style="white")
-        table.add_column("Size", style="white")
+        """Create active positions panel - compact"""
+        table = Table(title="Active Positions", box=box.SIMPLE)
+        table.add_column("Coin", style="cyan", width=6)
+        table.add_column("Entry", style="white", width=8)
+        table.add_column("Current", style="white", width=8)
+        table.add_column("PnL%", style="white", width=7)
+        table.add_column("Status", style="white", width=8)
         
         for symbol, position in self.position_manager.active_positions.items():
             pnl_style = "green" if position['pnl_percent'] >= 0 else "red"
             status_style = "yellow" if position['tp1_hit'] else "white"
             
+            # Shorter status text
+            status = position['status'].replace('TP1_HIT', 'TP1').replace('TP2_HIT', 'TP2').replace('ACTIVE', 'OPEN')
+            
             table.add_row(
-                position['coin'],
-                f"${position['entry_price']:.6f}",
-                f"${position['current_price']:.6f}",
+                position['coin'][:6],  # Truncate long coin names
+                f"${position['entry_price']:.4f}",  # Fewer decimals
+                f"${position['current_price']:.4f}",
                 Text(f"{position['pnl_percent']:+.2f}%", style=pnl_style),
-                Text(position['status'], style=status_style),
-                f"{position['remaining_size']}%"
+                Text(status, style=status_style)
             )
         
         if not self.position_manager.active_positions:
-            table.add_row("No active positions", "", "", "", "", "")
+            table.add_row("None", "", "", "", "")
         
         return Panel(table, style="blue")
 
     def create_signals_panel(self) -> Panel:
-        """Create recent signals panel"""
-        table = Table(title="🚨 Recent Signals", box=box.ROUNDED)
-        table.add_column("Time", style="cyan")
+        """Create recent signals panel - compact"""
+        table = Table(title="Recent Signals", box=box.SIMPLE)
+        table.add_column("Time", style="cyan", width=8)
         table.add_column("Signal", style="white")
         
-        signal_alerts = [alert for alert in self.alerts if 'SIGNAL' in alert['message']][:10]
+        signal_alerts = [alert for alert in self.alerts if 'SIGNAL' in alert['message']][:6]  # Show fewer
         
         for alert in signal_alerts:
-            table.add_row(alert['time'], alert['message'])
+            # Clean up signal message
+            message = alert['message'].replace('[SIGNAL]', '').strip()
+            table.add_row(alert['time'], message[:35])  # Truncate long messages
         
         if not signal_alerts:
-            table.add_row("No signals yet", "Waiting for opportunities...")
+            table.add_row("--:--:--", "Waiting for opportunities...")
         
         return Panel(table, style="yellow")
 
     def create_gainers_panel(self) -> Panel:
-        """Create top gainers panel with conditions"""
-        table = Table(title="📈 Top 25 Gainers Analysis", box=box.ROUNDED)
-        table.add_column("Coin", style="cyan")
-        table.add_column("Price", style="white")
-        table.add_column("Change%", style="white")
-        table.add_column("Conditions", style="white")
-        table.add_column("Status", style="white")
+        """Create top gainers panel - optimized for more coins"""
+        table = Table(title="Top 35 Gainers Analysis", box=box.SIMPLE)
+        table.add_column("Coin", style="cyan", width=6)
+        table.add_column("Price", style="white", width=10)
+        table.add_column("Change%", style="white", width=8)
+        table.add_column("Cond", style="white", width=5)
+        table.add_column("Status", style="white", width=12)
         
-        # Get top 15 for display
-        display_gainers = self.top_gainers[:15]
+        # Show more coins - top 20 for 14" screen
+        display_gainers = self.top_gainers[:20]
         
         for gainer in display_gainers:
             symbol = gainer['symbol']
@@ -226,19 +229,22 @@ class CryptoSignalBot:
             conditions_style = "green" if conditions_met == 8 else "yellow" if conditions_met >= 4 else "white"
             
             if symbol == f"{self.current_scanning_symbol}USDT":
-                status = "🔍 Scanning..."
+                status = "Scanning..."
                 status_style = "yellow"
             elif conditions_met == 8:
-                status = "🚨 SIGNAL!"
+                status = "SIGNAL READY"
                 status_style = "red"
+            elif conditions_met >= 6:
+                status = "Near Signal"
+                status_style = "yellow"
             else:
                 status = "Monitoring"
                 status_style = "white"
             
             table.add_row(
-                gainer['coin'],
+                gainer['coin'][:6],
                 f"${gainer['price']:.6f}",
-                Text(f"{gainer['change_24h']:+.2f}%", style=change_style),
+                Text(f"{gainer['change_24h']:+.1f}%", style=change_style),
                 Text(f"{conditions_met}/8", style=conditions_style),
                 Text(status, style=status_style)
             )
@@ -246,31 +252,32 @@ class CryptoSignalBot:
         return Panel(table, style="magenta")
 
     def create_logs_panel(self) -> Panel:
-        """Create logs panel"""
-        table = Table(title="📝 System Logs", box=box.ROUNDED)
-        table.add_column("Time", style="cyan")
+        """Create logs panel - compact"""
+        table = Table(title="System Logs", box=box.SIMPLE)
+        table.add_column("Time", style="cyan", width=8)
         table.add_column("Message", style="white")
         
-        for alert in self.alerts[:8]:
+        for alert in self.alerts[:5]:  # Show fewer logs
             style = "green" if alert['level'] == "success" else "red" if alert['level'] == "error" else "yellow" if alert['level'] == "warning" else "white"
-            table.add_row(alert['time'], Text(alert['message'], style=style))
+            message = alert['message'][:45]  # Truncate long messages
+            table.add_row(alert['time'], Text(message, style=style))
         
         return Panel(table, style="white")
 
     def create_footer(self) -> Panel:
-        """Create footer panel"""
+        """Create footer panel - compact"""
         if self.current_scanning_symbol:
-            scanning_text = f"🔍 Currently scanning: {self.current_scanning_symbol}"
+            scanning_text = f"Scanning: {self.current_scanning_symbol}"
         else:
-            scanning_text = "⏸️ Scanner idle"
+            scanning_text = "Scanner idle"
         
         footer_text = Text()
         footer_text.append(scanning_text, style="yellow")
         footer_text.append(" | ")
-        footer_text.append(f"Scan Cycles: {self.scan_stats['scan_cycles']}", style="green")
+        footer_text.append(f"Cycles: {self.scan_stats['scan_cycles']}", style="green")
         footer_text.append(" | ")
-        footer_text.append(f"Last Update: {datetime.now().strftime('%H:%M:%S')}", style="cyan")
-        footer_text.append(" | Press Ctrl+C to stop", style="red")
+        footer_text.append(f"Updated: {datetime.now().strftime('%H:%M:%S')}", style="cyan")
+        footer_text.append(" | Ctrl+C to stop", style="red")
         
         return Panel(Align.center(footer_text), style="white")
 
@@ -287,7 +294,7 @@ class CryptoSignalBot:
         return self.layout
 
     def get_top_gainers(self) -> List[Dict]:
-        """Fetch top 25 daily gainers from Binance"""
+        """Fetch top 35 daily gainers from Binance"""
         try:
             url = "https://api.binance.com/api/v3/ticker/24hr"
             response = requests.get(url, headers=self.headers, timeout=15)
@@ -336,11 +343,12 @@ class CryptoSignalBot:
                 except (ValueError, KeyError):
                     continue
             
-            top_gainers = sorted(filtered_tickers, key=lambda x: x['change_24h'], reverse=True)[:25]
+            # Increase to top 35 gainers
+            top_gainers = sorted(filtered_tickers, key=lambda x: x['change_24h'], reverse=True)[:35]
             return top_gainers
             
         except Exception as e:
-            self.log_message(f"❌ Error fetching gainers: {e}", "error")
+            self.log_message(f"Error fetching gainers: {e}", "error")
             return []
 
     def get_binance_data(self, symbol=None, intervals=["5m", "15m", "1h", "1d"]):
@@ -543,15 +551,15 @@ class CryptoSignalBot:
         return signal
 
     def run_scanner(self):
-        """Main scanning loop"""
+        """Main scanning loop - updated for 35 coins"""
         while self.running:
             try:
-                self.log_message("🔄 Fetching top 25 gainers...", "info")
+                self.log_message("Fetching top 35 gainers...", "info")
                 self.top_gainers = self.get_top_gainers()
-                self.scanning_symbols = [coin['symbol'] for coin in self.top_gainers[:25]]
+                self.scanning_symbols = [coin['symbol'] for coin in self.top_gainers[:35]]  # Scan 35 coins
                 
                 if not self.scanning_symbols:
-                    self.log_message("⚠️ No symbols to scan", "warning")
+                    self.log_message("No symbols to scan", "warning")
                     time.sleep(30)
                     continue
                 
@@ -587,12 +595,12 @@ class CryptoSignalBot:
                         if signal:
                             signals_found += 1
                             coin_name = symbol.replace('USDT', '')
-                            self.log_message(f"🚨 SIGNAL: {coin_name} LONG ENTRY - Level {signal['entry_level']}", "success")
+                            self.log_message(f"SIGNAL: {coin_name} LONG ENTRY - Level {signal['entry_level']}", "success")
                             
                             with open('signals.json', 'a') as f:
                                 f.write(json.dumps(signal) + '\n')
                         
-                        time.sleep(0.3)
+                        time.sleep(0.2)  # Faster scanning for more coins
                         
                     except Exception as e:
                         self.current_data[symbol] = None
@@ -605,12 +613,12 @@ class CryptoSignalBot:
                 self.scan_stats['last_scan_time'] = datetime.now()
                 
                 if signals_found > 0:
-                    self.log_message(f"✅ Scan complete: {signals_found} signals from {scanned_count} coins", "success")
+                    self.log_message(f"Scan complete: {signals_found} signals from {scanned_count} coins", "success")
                 
-                time.sleep(15)
+                time.sleep(12)  # Slightly faster cycles for more coins
                 
             except Exception as e:
-                self.log_message(f"❌ Scanner error: {e}", "error")
+                self.log_message(f"Scanner error: {e}", "error")
                 time.sleep(30)
 
     def start(self):
@@ -619,13 +627,13 @@ class CryptoSignalBot:
             self.running = True
             scanner_thread = threading.Thread(target=self.run_scanner, daemon=True)
             scanner_thread.start()
-            self.log_message("🚀 Multi-Scanner Started - Terminal Edition", "success")
+            self.log_message("Multi-Scanner Started - Terminal Edition", "success")
 
     def stop(self):
         """Stop the bot"""
         self.running = False
         self.position_manager.stop_monitoring()
-        self.log_message("⏹️ Bot Stopped", "warning")
+        self.log_message("Bot Stopped", "warning")
 
 def main():
     """Main function to run the terminal app"""

@@ -77,13 +77,14 @@ class TelegramNotifier:
 
 💪 **Order Book:** Strong buying pressure
 ⏰ **Time:** {datetime.now().strftime('%H:%M:%S')}
+
+🚀 **35-Coin Scanner - Terminal Edition**
             """.strip()
             
             return self.send_message(message)
             
         except Exception as e:
             print(f"Error sending signal alert: {e}")
-            return False
             return False
     
     def send_position_update(self, symbol: str, status: str, price: float, pnl_percent: float) -> bool:

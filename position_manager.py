@@ -42,7 +42,7 @@ class PositionManager:
             'stop_loss': signal['stop_loss'],
             'original_stop_loss': signal['stop_loss'],
             'entry_level': signal['entry_level'],
-            'position_size': signal['position_size'],
+            'position_size': self.get_position_size(signal['entry_level']),  # Add this
             'confidence': signal['confidence'],
             'entry_time': datetime.now().strftime('%H:%M:%S'),
             'entry_timestamp': time.time(),
@@ -65,6 +65,11 @@ class PositionManager:
             self.start_monitoring()
         
         print(f"✅ Position added: {signal['coin']} at ${signal['entry_price']:.6f}")
+
+    def get_position_size(self, entry_level: int) -> str:
+        """Get position size based on entry level"""
+        sizes = {1: "50%", 2: "25%", 3: "25%"}
+        return sizes.get(entry_level, "50%")
 
     def start_monitoring(self):
         """Start monitoring positions"""
