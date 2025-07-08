@@ -616,153 +616,483 @@ class CryptoSignalBot:
             return []
 
     def get_binance_data(self, symbol=None, intervals=["5m", "15m", "1h", "1d"]):
-        """Fetch real-time data from Binance API"""
+        """Fetch real-time data from Binance API with retry logic"""
         base_url = "https://api.binance.com/api/v3/klines"
         data = {}
+        max_retries = 3
+        
+        if not symbol:
+            return {}
         
         for interval in intervals:
-            try:
-                params = {
-                    'symbol': symbol,
-                    'interval': interval,
-                    'limit': 200
-                }
-                response = requests.get(base_url, params=params, timeout=10)
-                if response.status_code == 200:
-                    klines = response.json()
-                    df = pd.DataFrame(klines, columns=[
-                        'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                        'close_time', 'quote_asset_volume', 'number_of_trades',
-                        'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-                    ])
-                    df = df.astype({
-                        'open': float, 'high': float, 'low': float, 
-                        'close': float, 'volume': float
-                    })
-                    data[interval] = df
-            except Exception as e:
-                continue
-                
-        return data
+            retries = 0
+            while retries < max_retries:
+                try:
+                    params = {
+                        'symbol': symbol,
+                        'interval': interval,
+                        'limit': 200
+                    }
+                    response = requests.get(base_url, params=params, timeout=10)
+                    if response.status_code == 200:
+                        klines = response.json()
+                        
+                        # Check if we have enough data
+                        if len(klines) < 50:
+                            self.log_message(f"Not enough {interval} data for {symbol}: only {len(klines)} candles", "warning")
+                            retries += 1
+                            time.sleep(0.5)
+                            continue
+                        
+                        df = pd.DataFrame(klines, columns=[
+                            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                            'close_time', 'quote_asset_volume', 'number_of_trades',
+                            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+                        ])
+                        
+                        # Convert all price columns to numeric to avoid errors
+                        for col in ['open', 'high', 'low', 'close', 'volume']:
+                            df[col] = pd.to_numeric(df[col], errors='coerce')
+                        
+                        # Verify that there are no NaN values in critical columns
+                        if df['close'].isna().any() or df['volume'].isna().any():
+                            self.log_message(f"NaN values in {interval} data for {symbol}", "warning")
+                            retries += 1
+                            time.sleep(0.5)
+                            continue
+                        
+                        data[interval] = df
+                        break
+                    else:
+                        self.log_message(f"Error fetching {interval} data for {symbol}: {response.status_code}", "error")
+                        retries += 1
+                        time.sleep(1)  # Exponential backoff
+                except Exception as e:
+                    self.log_message(f"Exception fetching {interval} data for {symbol}: {str(e)[:30]}", "error")
+                    retries += 1
+                    time.sleep(1)
     
-    def calculate_indicators(self, data: Dict[str, pd.DataFrame]) -> Optional[MarketData]:
-        """Calculate all technical indicators with better error handling"""
+    # Check if we have all required intervals
+    for interval in intervals:
+        if interval not in data:
+            return {}  # Missing a required interval
+            
+    return data
+
+def calculate_indicators(self, data: Dict[str, pd.DataFrame]) -> Optional[MarketData]:
+    """Calculate all technical indicators with comprehensive error handling and fallbacks"""
+    try:
+        # Validate input data first
+        required_intervals = ['5m', '15m', '1h', '1d']
+        for interval in required_intervals:
+            if interval not in data or data[interval].empty:
+                return None
+            
+            # Make sure we have enough data points for calculations
+            if len(data[interval]) < 50:
+                self.log_message(f"Not enough data points for {interval}", "warning")
+                return None
+        
+        # Extract price and ensure it's valid
         try:
-            # Validate input data first
-            required_intervals = ['5m', '15m', '1h', '1d']
-            for interval in required_intervals:
-                if interval not in data or data[interval].empty:
-                    return None
-            
-            # Convert all price columns to numeric to avoid Rational instance errors
-            for interval in required_intervals:
-                df = data[interval]
-                for col in ['open', 'high', 'low', 'close', 'volume']:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-            
             current_price = float(data['5m']['close'].iloc[-1])
-            
-            # Validate price
             if pd.isna(current_price) or current_price <= 0:
                 return None
-                
-            # Existing RSI indicators
-            rsi_5m = ta.momentum.RSIIndicator(data['5m']['close'], window=7).rsi().iloc[-1]
-            rsi_15m = ta.momentum.RSIIndicator(data['15m']['close'], window=7).rsi().iloc[-1]
-            rsi_1h = ta.momentum.RSIIndicator(data['1h']['close'], window=14).rsi().iloc[-1]
-            
-            # Enhanced Bollinger Bands
+        except Exception as e:
+            self.log_message(f"Error extracting price: {str(e)[:30]}", "error")
+            return None
+        
+        # Initialize with default values in case calculations fail
+        indicator_values = {
+            'rsi_5m': 50.0,
+            'rsi_15m': 50.0,
+            'rsi_1h': 50.0,
+            'bb_lower': current_price * 0.98,
+            'bb_upper': current_price * 1.02,
+            'bb_middle': current_price,
+            'ema_9_15m': current_price,
+            'ema_21_15m': current_price,
+            'ema_20_15m': current_price,
+            'ema_50_daily': current_price,
+            'weekly_support': current_price * 0.95,
+            'macd_5m': 0.0,
+            'macd_signal_5m': 0.0,
+            'macd_histogram_5m': 0.0,
+            'stoch_k': 50.0,
+            'stoch_d': 50.0,
+            'atr_5m': current_price * 0.01,
+            'volatility_ratio': 1.0,
+            'btc_strength': 0.0,
+            'volume': 0.0,
+            'volume_avg': 1.0,
+        }
+        
+        # --- RSI Calculations ---
+        try:
+            indicator_values['rsi_5m'] = ta.momentum.RSIIndicator(data['5m']['close'], window=7).rsi().iloc[-1]
+            indicator_values['rsi_15m'] = ta.momentum.RSIIndicator(data['15m']['close'], window=7).rsi().iloc[-1]
+            indicator_values['rsi_1h'] = ta.momentum.RSIIndicator(data['1h']['close'], window=14).rsi().iloc[-1]
+        except Exception as e:
+            self.log_message(f"RSI calculation error: {str(e)[:30]}", "warning")
+        
+        # --- Bollinger Bands ---
+        try:
             bb_5m = ta.volatility.BollingerBands(data['5m']['close'], window=20, window_dev=2)
-            bb_lower = bb_5m.bollinger_lband().iloc[-1]
-            bb_upper = bb_5m.bollinger_hband().iloc[-1]
-            bb_middle = bb_5m.bollinger_mavg().iloc[-1]
-            
-            # EMA indicators
-            ema_9_15m = ta.trend.EMAIndicator(data['15m']['close'], window=9).ema_indicator().iloc[-1]
-            ema_21_15m = ta.trend.EMAIndicator(data['15m']['close'], window=21).ema_indicator().iloc[-1]
-            ema_20_15m = ta.trend.EMAIndicator(data['15m']['close'], window=20).ema_indicator().iloc[-1]
-            ema_50_daily = ta.trend.EMAIndicator(data['1d']['close'], window=50).ema_indicator().iloc[-1]
-            
-            # NEW: MACD for momentum confirmation
+            indicator_values['bb_lower'] = bb_5m.bollinger_lband().iloc[-1]
+            indicator_values['bb_upper'] = bb_5m.bollinger_hband().iloc[-1]
+            indicator_values['bb_middle'] = bb_5m.bollinger_mavg().iloc[-1]
+        except Exception as e:
+            self.log_message(f"BB calculation error: {str(e)[:30]}", "warning")
+        
+        # --- EMAs ---
+        try:
+            indicator_values['ema_9_15m'] = ta.trend.EMAIndicator(data['15m']['close'], window=9).ema_indicator().iloc[-1]
+            indicator_values['ema_21_15m'] = ta.trend.EMAIndicator(data['15m']['close'], window=21).ema_indicator().iloc[-1]
+            indicator_values['ema_20_15m'] = ta.trend.EMAIndicator(data['15m']['close'], window=20).ema_indicator().iloc[-1]
+            indicator_values['ema_50_daily'] = ta.trend.EMAIndicator(data['1d']['close'], window=50).ema_indicator().iloc[-1]
+        except Exception as e:
+            self.log_message(f"EMA calculation error: {str(e)[:30]}", "warning")
+        
+        # --- MACD ---
+        try:
             macd_indicator = ta.trend.MACD(data['5m']['close'], window_slow=26, window_fast=12, window_sign=9)
-            macd_5m = macd_indicator.macd().iloc[-1]
-            macd_signal_5m = macd_indicator.macd_signal().iloc[-1]
-            macd_histogram_5m = macd_indicator.macd_diff().iloc[-1]
-            
-            # NEW: Stochastic for oversold confirmation
+            indicator_values['macd_5m'] = macd_indicator.macd().iloc[-1]
+            indicator_values['macd_signal_5m'] = macd_indicator.macd_signal().iloc[-1]
+            indicator_values['macd_histogram_5m'] = macd_indicator.macd_diff().iloc[-1]
+        except Exception as e:
+            self.log_message(f"MACD calculation error: {str(e)[:30]}", "warning")
+        
+        # --- Stochastic ---
+        try:
             stoch_indicator = ta.momentum.StochasticOscillator(data['5m']['high'], data['5m']['low'], data['5m']['close'], window=14, smooth_window=3)
-            stoch_k = stoch_indicator.stoch().iloc[-1]
-            stoch_d = stoch_indicator.stoch_signal().iloc[-1]
-            
-            # NEW: ATR for volatility
+            indicator_values['stoch_k'] = stoch_indicator.stoch().iloc[-1]
+            indicator_values['stoch_d'] = stoch_indicator.stoch_signal().iloc[-1]
+        except Exception as e:
+            self.log_message(f"Stochastic calculation error: {str(e)[:30]}", "warning")
+        
+        # --- ATR ---
+        try:
             atr_indicator = ta.volatility.AverageTrueRange(data['5m']['high'], data['5m']['low'], data['5m']['close'], window=14)
-            atr_5m = atr_indicator.average_true_range().iloc[-1]
+            indicator_values['atr_5m'] = atr_indicator.average_true_range().iloc[-1]
+        except Exception as e:
+            self.log_message(f"ATR calculation error: {str(e)[:30]}", "warning")
+        
+        # --- Volume Analysis ---
+        try:
+            indicator_values['volume'] = float(data['5m']['volume'].iloc[-1])
+            indicator_values['volume_avg'] = data['5m']['volume'].rolling(20).mean().iloc[-1]
+            # Make sure volume_avg is not zero to avoid division by zero
+            if pd.isna(indicator_values['volume_avg']) or indicator_values['volume_avg'] <= 0:
+                indicator_values['volume_avg'] = indicator_values['volume'] if indicator_values['volume'] > 0 else 1.0
+        except Exception as e:
+            self.log_message(f"Volume calculation error: {str(e)[:30]}", "warning")
+        
+        # --- Weekly Support ---
+        try:
+            indicator_values['weekly_support'] = data['1d']['low'].tail(7).min()
+        except Exception as e:
+            self.log_message(f"Support calculation error: {str(e)[:30]}", "warning")
+        
+        # --- BTC Trend Strength ---
+        try:
+            price_vs_ema50 = (current_price - indicator_values['ema_50_daily']) / indicator_values['ema_50_daily'] * 100
+            indicator_values['btc_trend'] = "UP" if price_vs_ema50 > -2 else "DOWN"
+            indicator_values['btc_strength'] = abs(price_vs_ema50)
+        except Exception as e:
+            indicator_values['btc_trend'] = "UP"  # Default to UP
+            self.log_message(f"Trend calculation error: {str(e)[:30]}", "warning")
+        
+        # --- Volatility Ratio ---
+        try:
+            bb_width = (indicator_values['bb_upper'] - indicator_values['bb_lower']) / indicator_values['bb_middle']
             
-            # Volume analysis
-            current_volume = float(data['5m']['volume'].iloc[-1])
-            volume_avg = data['5m']['volume'].rolling(20).mean().iloc[-1]
-            
-            # Support level
-            weekly_support = data['1d']['low'].tail(7).min()
-            
-            # NEW: Enhanced BTC trend strength
-            price_vs_ema50 = (current_price - ema_50_daily) / ema_50_daily * 100
-            btc_trend = "UP" if price_vs_ema50 > -2 else "DOWN"  # More lenient
-            btc_strength = abs(price_vs_ema50)
-            
-            # NEW: Volatility ratio for market regime
-            bb_width = (bb_upper - bb_lower) / bb_middle
+            # Calculate historical BB width
             historical_bb_width = []
-            for i in range(20):
+            for i in range(1, 20):
                 try:
-                    hist_bb = ta.volatility.BollingerBands(data['5m']['close'].iloc[-(20-i):], window=20, window_dev=2)
-                    hist_width = (hist_bb.bollinger_hband().iloc[-1] - hist_bb.bollinger_lband().iloc[-1]) / hist_bb.bollinger_mavg().iloc[-1]
-                    historical_bb_width.append(hist_width)
+                    if i < len(data['5m']):
+                        window_data = data['5m']['close'].iloc[-20-i:-i]
+                        if len(window_data) >= 20:
+                            hist_bb = ta.volatility.BollingerBands(window_data, window=20, window_dev=2)
+                            upper = hist_bb.bollinger_hband().iloc[-1]
+                            lower = hist_bb.bollinger_lband().iloc[-1]
+                            middle = hist_bb.bollinger_mavg().iloc[-1]
+                            if middle > 0 and not pd.isna(middle):
+                                hist_width = (upper - lower) / middle
+                                historical_bb_width.append(hist_width)
                 except:
                     continue
             
             avg_bb_width = np.mean(historical_bb_width) if historical_bb_width else bb_width
-            volatility_ratio = bb_width / avg_bb_width if avg_bb_width > 0 else 1.0
-            
-            return MarketData(
-                price=current_price,
-                rsi_5m=rsi_5m,
-                rsi_15m=rsi_15m,
-                rsi_1h=rsi_1h,
-                volume=current_volume,
-                volume_avg=volume_avg,
-                bb_lower=bb_lower,
-                bb_upper=bb_upper,
-                bb_middle=bb_middle,
-                ema_9_15m=ema_9_15m,
-                ema_21_15m=ema_21_15m,
-                ema_20_15m=ema_20_15m,
-                ema_50_daily=ema_50_daily,
-                weekly_support=weekly_support,
-                btc_trend=btc_trend,
-                macd_5m=macd_5m,
-                macd_signal_5m=macd_signal_5m,
-                macd_histogram_5m=macd_histogram_5m,
-                stoch_k=stoch_k,
-                stoch_d=stoch_d,
-                atr_5m=atr_5m,
-                volatility_ratio=volatility_ratio,
-                btc_strength=btc_strength,
-                timestamp=datetime.now()
-            )
+            indicator_values['volatility_ratio'] = bb_width / avg_bb_width if avg_bb_width > 0 else 1.0
         except Exception as e:
-            self.log_message(f"Indicator calculation error: {str(e)[:30]}", "error")
-            return None
-
-    def check_strategy_conditions(self, data: MarketData) -> Dict[str, bool]:
-        """OPTIMIZED: Check only 5 CORE conditions with adaptive thresholds"""
-        conditions = {}
+            self.log_message(f"Volatility ratio calculation error: {str(e)[:30]}", "warning")
         
+        # Check for any NaN values and replace with defaults
+        for key, value in indicator_values.items():
+            if pd.isna(value) or np.isinf(value):
+                if key == 'rsi_5m' or key == 'rsi_15m' or key == 'rsi_1h':
+                    indicator_values[key] = 50.0
+                elif key == 'stoch_k' or key == 'stoch_d':
+                    indicator_values[key] = 50.0
+                elif key == 'volume' or key == 'volume_avg':
+                    indicator_values[key] = 1.0
+                elif key in ['macd_5m', 'macd_signal_5m', 'macd_histogram_5m']:
+                    indicator_values[key] = 0.0
+                elif key == 'volatility_ratio':
+                    indicator_values[key] = 1.0
+                else:
+                    indicator_values[key] = current_price * 0.98 if 'lower' in key else current_price * 1.02
+        
+        # Create and return MarketData object with all calculated indicators
+        return MarketData(
+            price=current_price,
+            rsi_5m=float(indicator_values['rsi_5m']),
+            rsi_15m=float(indicator_values['rsi_15m']),
+            rsi_1h=float(indicator_values['rsi_1h']),
+            volume=float(indicator_values['volume']),
+            volume_avg=float(indicator_values['volume_avg']),
+            bb_lower=float(indicator_values['bb_lower']),
+            bb_upper=float(indicator_values['bb_upper']),
+            bb_middle=float(indicator_values['bb_middle']),
+            ema_9_15m=float(indicator_values['ema_9_15m']),
+            ema_21_15m=float(indicator_values['ema_21_15m']),
+            ema_20_15m=float(indicator_values['ema_20_15m']),
+            ema_50_daily=float(indicator_values['ema_50_daily']),
+            weekly_support=float(indicator_values['weekly_support']),
+            btc_trend=str(indicator_values['btc_trend']),
+            macd_5m=float(indicator_values['macd_5m']),
+            macd_signal_5m=float(indicator_values['macd_signal_5m']),
+            macd_histogram_5m=float(indicator_values['macd_histogram_5m']),
+            stoch_k=float(indicator_values['stoch_k']),
+            stoch_d=float(indicator_values['stoch_d']),
+            atr_5m=float(indicator_values['atr_5m']),
+            volatility_ratio=float(indicator_values['volatility_ratio']),
+            btc_strength=float(indicator_values['btc_strength']),
+            timestamp=datetime.now()
+        )
+    except Exception as e:
+        self.log_message(f"Fatal indicator calculation error: {str(e)}", "error")
+        return None
+
+def run_scanner(self):
+    """Main scanning loop with improved handling of failed calculations"""
+    while self.running:
+        try:
+            self.log_message("Fetching top 35 gainers...", "info")
+            self.top_gainers = self.get_top_gainers()
+            
+            if not self.top_gainers:
+                self.log_message("No gainers found, retrying in 30s", "warning")
+                time.sleep(30)
+                continue
+                
+            self.scanning_symbols = [coin['symbol'] for coin in self.top_gainers[:35]]
+            
+            if not self.scanning_symbols:
+                self.log_message("No symbols to scan", "warning")
+                time.sleep(30)
+                continue
+            
+            active_positions = self.position_manager.get_active_symbols()
+            available_symbols = [s for s in self.scanning_symbols if s not in active_positions]
+            
+            signals_found = 0
+            scanned_count = 0
+            failed_count = 0
+            
+            # Don't clear all data, just mark as stale
+            for symbol in list(self.current_data.keys()):
+                if symbol not in self.scanning_symbols:
+                    del self.current_data[symbol]  # Remove old symbols
+            
+            self.log_message(f"Starting scan of {len(available_symbols)} coins", "info")
+            
+            for i, symbol in enumerate(available_symbols):
+                try:
+                    self.current_scanning_symbol = symbol.replace('USDT', '')
+                    
+                    # Update progress in stats
+                    self.scan_stats['total_scanned'] = scanned_count
+                    
+                    # Get market data with retries
+                    market_data = self.get_binance_data(symbol)
+                    if not market_data or '5m' not in market_data:
+                        failed_count += 1
+                        self.current_data[symbol] = None
+                        continue
+                    
+                    # Calculate indicators with improved error handling
+                    current_data = self.calculate_indicators(market_data)
+                    if current_data is None:
+                        failed_count += 1
+                        self.current_data[symbol] = None
+                        continue
+                    
+                    # Store calculated data
+                    self.current_data[symbol] = current_data
+                    scanned_count += 1
+                    
+                    # Calculate strategy conditions
+                    conditions = self.check_strategy_conditions(current_data)
+                    
+                    # Log progress every 10 coins
+                    if i > 0 and i % 10 == 0:
+                        self.log_message(f"Scanned {scanned_count} coins, {failed_count} failed", "info")
+                    
+                    # Check for entry signals
+                    signal = self.check_entry_signals(symbol, current_data, conditions)
+                    
+                    if signal:
+                        signals_found += 1
+                        coin_name = symbol.replace('USDT', '')
+                        self.log_message(f"SIGNAL: {coin_name} LONG ENTRY - Level {signal['entry_level']}", "success")
+                        
+                        with open('signals.json', 'a') as f:
+                            f.write(json.dumps(signal) + '\n')
+                    
+                    # Add a small delay to avoid rate limiting
+                    time.sleep(0.2)
+                    
+                except Exception as e:
+                    self.log_message(f"Error scanning {symbol}: {str(e)[:30]}", "error")
+                    failed_count += 1
+                    self.current_data[symbol] = None
+                    continue
+            
+            # Complete scan cycle
+            self.current_scanning_symbol = None
+            self.scan_stats['scan_cycles'] += 1
+            self.scan_stats['total_scanned'] = scanned_count
+            self.scan_stats['signals_found'] += signals_found
+            self.scan_stats['last_scan_time'] = datetime.now()
+            
+            if signals_found > 0:
+                self.log_message(f"Scan complete: {signals_found} signals from {scanned_count} coins ({failed_count} failed)", "success")
+            else:
+                self.log_message(f"Scan complete: {scanned_count} coins analyzed, {failed_count} failed, no signals", "info")
+            
+            # Wait before next scan cycle
+            time.sleep(config.SCAN_INTERVAL)
+            
+        except Exception as e:
+            self.log_message(f"Scanner error: {str(e)}", "error")
+            time.sleep(30)
+
+def get_order_book_imbalance(self, symbol: str) -> Optional[float]:
+    """Get order book imbalance ratio with better error handling and fallback"""
+    try:
+        url = "https://api.binance.com/api/v3/depth"
+        params = {'symbol': symbol, 'limit': 100}
+        
+        # Use retries
+        for attempt in range(3):
+            try:
+                response = requests.get(url, params=params, timeout=5)
+                
+                if response.status_code == 200:
+                    depth_data = response.json()
+                    
+                    if 'bids' not in depth_data or 'asks' not in depth_data:
+                        time.sleep(1)
+                        continue
+                    
+                    if not depth_data['bids'] or not depth_data['asks']:
+                        return 1.0  # Default to neutral if no data
+                    
+                    total_bid_volume = sum(float(bid[1]) for bid in depth_data['bids'])
+                    total_ask_volume = sum(float(ask[1]) for ask in depth_data['asks'])
+                    
+                    if total_ask_volume > 0:
+                        ratio = total_bid_volume / total_ask_volume
+                        # Cap the ratio to avoid extreme values
+                        return min(5.0, max(0.2, ratio))
+                    else:
+                        return 2.0  # Default high imbalance if no asks
+                        
+                time.sleep(0.5)
+            except requests.exceptions.RequestException:
+                time.sleep(1)
+        
+        return 1.0  # Default to neutral if all attempts failed
+    except Exception as e:
+        self.log_message(f"Order book error for {symbol}: {str(e)[:20]}", "error")
+        return 1.0  # Default to neutral
+
+def calculate_atr_levels(self, data: Dict[str, pd.DataFrame], entry_price: float) -> Dict[str, float]:
+    """Calculate ATR-based levels with improved error handling and fallback"""
+    try:
+        # Ensure we have valid data
+        if '5m' not in data or data['5m'].empty:
+            return self._get_default_levels(entry_price)
+            
+        df_5m = data['5m'].copy()
+        
+        # Convert to numeric to avoid calculation errors
+        df_5m['high'] = pd.to_numeric(df_5m['high'], errors='coerce')
+        df_5m['low'] = pd.to_numeric(df_5m['low'], errors='coerce')
+        df_5m['close'] = pd.to_numeric(df_5m['close'], errors='coerce')
+        
+        # Check if there are NaN values
+        if df_5m['high'].isna().any() or df_5m['low'].isna().any() or df_5m['close'].isna().any():
+            return self._get_default_levels(entry_price)
+        
+        # Calculate True Range components
+        df_5m['high_low'] = df_5m['high'] - df_5m['low']
+        df_5m['high_close_prev'] = abs(df_5m['high'] - df_5m['close'].shift(1))
+        df_5m['low_close_prev'] = abs(df_5m['low'] - df_5m['close'].shift(1))
+        df_5m['true_range'] = df_5m[['high_low', 'high_close_prev', 'low_close_prev']].max(axis=1)
+        
+        # Calculate ATR (14-period average)
+        atr_14 = df_5m['true_range'].rolling(window=14).mean().iloc[-1]
+        
+        # Validate ATR
+        if pd.isna(atr_14) or atr_14 <= 0:
+            atr_14 = entry_price * 0.02  # 2% default
+        
+        # Calculate levels and ensure they're valid
+        stop_loss = float(entry_price - (0.8 * atr_14))
+        tp1 = float(entry_price + (1.0 * atr_14))
+        tp2 = float(entry_price + (1.8 * atr_14))
+        
+        # Validate levels (ensure they make sense)
+        if stop_loss <= 0 or stop_loss >= entry_price:
+            stop_loss = entry_price * 0.99
+            
+        if tp1 <= entry_price:
+            tp1 = entry_price * 1.008
+            
+        if tp2 <= tp1:
+            tp2 = tp1 * 1.005
+        
+        return {
+            'atr': float(atr_14),
+            'stop_loss': stop_loss,
+            'tp1': tp1,
+            'tp2': tp2
+        }
+    except Exception as e:
+        self.log_message(f"ATR calculation error: {str(e)[:20]}", "error")
+        return self._get_default_levels(entry_price)
+
+def _get_default_levels(self, entry_price: float) -> Dict[str, float]:
+    """Get default levels based on percentage of price"""
+    return {
+        'atr': float(entry_price * 0.02),
+        'stop_loss': float(entry_price * 0.99),
+        'tp1': float(entry_price * 1.008),
+        'tp2': float(entry_price * 1.015)
+    }
+
+def check_strategy_conditions(self, data: MarketData) -> Dict[str, bool]:
+    """Check strategy conditions with better error handling"""
+    conditions = {}
+    
+    try:
         # Adaptive thresholds based on volatility
         high_vol = data.volatility_ratio > 1.2
-        bb_threshold = 1.015 if high_vol else 1.008  # More lenient in high volatility
-        rsi_threshold = 55 if high_vol else 50       # More lenient RSI in high volatility
+        bb_threshold = 1.015 if high_vol else 1.008
+        rsi_threshold = 55 if high_vol else 50
         
         # CORE CONDITION 1: Bollinger Band Touch (ADAPTIVE)
         bb_touch_threshold = data.bb_lower * bb_threshold
@@ -772,234 +1102,29 @@ class CryptoSignalBot:
         conditions['rsi_oversold'] = data.rsi_5m < rsi_threshold and data.rsi_5m > 25
         
         # CORE CONDITION 3: MACD Momentum Building (NEW)
-        # MACD histogram increasing (momentum building) OR MACD above signal
         conditions['macd_momentum'] = (data.macd_histogram_5m > -0.001) or (data.macd_5m > data.macd_signal_5m)
         
         # CORE CONDITION 4: Stochastic Oversold Recovery (NEW)
-        # Stochastic oversold but showing signs of recovery
         conditions['stoch_recovery'] = (data.stoch_k < 30 and data.stoch_k > data.stoch_d) or (data.stoch_k < 40 and data.stoch_k > 25)
         
         # CORE CONDITION 5: Trend Alignment (SIMPLIFIED)
-        # Price above EMA20 (15m) AND general uptrend OR strong bounce potential
         trend_ok = (data.price > data.ema_20_15m * 0.998) or (data.btc_strength > 3 and data.btc_trend == "UP")
         conditions['trend_alignment'] = trend_ok
         
         # BONUS CONDITION 6: Volume Confirmation (OPTIONAL - not required)
-        # Either declining volume (accumulation) OR increasing volume (breakout)
-        volume_ratio = data.volume / data.volume_avg
+        volume_ratio = data.volume / data.volume_avg if data.volume_avg > 0 else 0
         conditions['volume_confirm'] = (volume_ratio < 0.8) or (volume_ratio > 1.3)
         
-        return conditions
-
-    def check_entry_signals(self, symbol: str, data: MarketData, conditions: Dict[str, bool]) -> Optional[Dict]:
-        """OPTIMIZED: More lenient entry requirements"""
-        
-        # NEW REQUIREMENT: At least 4 out of 5 CORE conditions (instead of all 8)
-        core_conditions = ['bb_touch', 'rsi_oversold', 'macd_momentum', 'stoch_recovery', 'trend_alignment']
-        core_conditions_met = sum(conditions[cond] for cond in core_conditions)
-        
-        if core_conditions_met < 4:
-            return None
-        
-        # FILTER 1: No duplicate positions
-        if symbol in self.position_manager.get_active_symbols():
-            return None
-            
-        # FILTER 2: Reduced cooldown (3 minutes instead of 5)
-        current_time = time.time()
-        if symbol in self.last_alert_time and current_time - self.last_alert_time[symbol] < 180:
-            return None
-            
-        # FILTER 3: Maximum concurrent positions
-        if len(self.position_manager.get_active_symbols()) >= config.MAX_CONCURRENT_POSITIONS:
-            return None
-        
-        # FILTER 4: RELAXED order book requirement (1.1 instead of 1.3)
-        imbalance_ratio = self.get_order_book_imbalance(symbol)
-        if imbalance_ratio is None or imbalance_ratio < 1.1:
-            return None
-
-        # ENHANCED: Entry level based on signal strength
-        signal_strength = core_conditions_met + (1 if conditions.get('volume_confirm', False) else 0)
-        
-        if signal_strength >= 6:  # Perfect signal
-            entry_level = 3
-            confidence = 95
-        elif signal_strength == 5:  # Strong signal
-            entry_level = 2
-            confidence = 85
-        else:  # Good signal (4 conditions)
-            entry_level = 1
-            confidence = 75
-        
-        # Additional strength factors
-        if data.stoch_k < 20:  # Very oversold
-            entry_level = min(3, entry_level + 1)
-            confidence += 5
-        
-        if data.macd_5m > data.macd_signal_5m and data.macd_histogram_5m > 0:  # Strong momentum
-            confidence += 5
-            
-        market_data = self.get_binance_data(symbol)
-        if not market_data or '5m' not in market_data:
-            return None
-        
-        atr_levels = self.calculate_atr_levels(market_data, data.price)
-        
-        signal = {
-            'type': 'LONG_ENTRY',
-            'symbol': symbol,
-            'coin': symbol.replace('USDT', ''),
-            'entry_price': data.price,
-            'tp1': atr_levels['tp1'],
-            'tp2': atr_levels['tp2'],
-            'stop_loss': atr_levels['stop_loss'],
-            'entry_level': entry_level,
-            'confidence': min(confidence, 99),
-            'signal_strength': signal_strength,
-            'core_conditions_met': core_conditions_met,
-            'rsi_5m': data.rsi_5m,
-            'rsi_15m': data.rsi_15m,
-            'rsi_1h': data.rsi_1h,
-            'macd_momentum': data.macd_histogram_5m,
-            'stoch_k': data.stoch_k,
-            'volatility_ratio': data.volatility_ratio,
-            'timestamp': datetime.now().isoformat(),
-            'atr_value': atr_levels['atr'],
-            'order_book_imbalance': imbalance_ratio,
-            'strategy_version': 'v4_optimized'
+    except Exception as e:
+        # If any condition check fails, set all to False
+        self.log_message(f"Error checking conditions: {str(e)[:30]}", "error")
+        conditions = {
+            'bb_touch': False,
+            'rsi_oversold': False,
+            'macd_momentum': False,
+            'stoch_recovery': False,
+            'trend_alignment': False,
+            'volume_confirm': False
         }
-        
-        self.position_manager.add_position(signal)
-        
-        if self.telegram_notifier:
-            self.telegram_notifier.send_signal_alert(signal)
-        
-        self.last_alert_time[symbol] = current_time
-        return signal
-
-    def run_scanner(self):
-        """Main scanning loop - updated for 35 coins"""
-        while self.running:
-            try:
-                self.log_message("Fetching top 35 gainers...", "info")
-                self.top_gainers = self.get_top_gainers()
-                self.scanning_symbols = [coin['symbol'] for coin in self.top_gainers[:35]]  # Scan 35 coins
-                
-                if not self.scanning_symbols:
-                    self.log_message("No symbols to scan", "warning")
-                    time.sleep(30)
-                    continue
-                
-                active_positions = self.position_manager.get_active_symbols()
-                available_symbols = [s for s in self.scanning_symbols if s not in active_positions]
-                
-                signals_found = 0
-                scanned_count = 0
-                
-                # Don't clear all data, just mark as stale
-                for symbol in self.current_data.keys():
-                    if symbol not in available_symbols:
-                        self.current_data[symbol] = None
-                
-                self.log_message(f"Starting scan of {len(available_symbols)} coins", "info")
-                
-                for i, symbol in enumerate(available_symbols):
-                    try:
-                        self.current_scanning_symbol = symbol.replace('USDT', '')
-                        
-                        # Update progress in stats
-                        self.scan_stats['total_scanned'] = scanned_count
-                        
-                        market_data = self.get_binance_data(symbol)
-                        if not market_data or '5m' not in market_data:
-                            self.current_data[symbol] = None
-                            continue
-                            
-                        current_data = self.calculate_indicators(market_data)
-                        if not current_data:
-                            self.current_data[symbol] = None
-                            continue
-                        
-                        self.current_data[symbol] = current_data
-                        scanned_count += 1
-                        
-                        conditions = self.check_strategy_conditions(current_data)
-                        conditions_met = sum(conditions.values())
-                        
-                        # Log progress every 10 coins
-                        if scanned_count % 10 == 0:
-                            self.log_message(f"Scanned {scanned_count}/{len(available_symbols)} coins", "info")
-                        
-                        signal = self.check_entry_signals(symbol, current_data, conditions)
-                        
-                        if signal:
-                            signals_found += 1
-                            coin_name = symbol.replace('USDT', '')
-                            self.log_message(f"SIGNAL: {coin_name} LONG ENTRY - Level {signal['entry_level']}", "success")
-                            
-                            with open('signals.json', 'a') as f:
-                                f.write(json.dumps(signal) + '\n')
-                        
-                        time.sleep(0.2)
-                        
-                    except Exception as e:
-                        self.log_message(f"Error scanning {symbol}: {str(e)[:20]}", "error")
-                        self.current_data[symbol] = None
-                        continue
-                
-                # Complete scan cycle
-                self.current_scanning_symbol = None
-                self.scan_stats['scan_cycles'] += 1
-                self.scan_stats['total_scanned'] = scanned_count
-                self.scan_stats['signals_found'] += signals_found
-                self.scan_stats['last_scan_time'] = datetime.now()
-                
-                if signals_found > 0:
-                    self.log_message(f"Scan complete: {signals_found} signals from {scanned_count} coins", "success")
-                else:
-                    self.log_message(f"Scan complete: {scanned_count} coins analyzed, no signals", "info")
-                
-                time.sleep(12)
-                
-            except Exception as e:
-                self.log_message(f"Scanner error: {str(e)[:30]}", "error")
-                time.sleep(30)
-
-    def start(self):
-        """Start the bot"""
-        if not self.running:
-            self.running = True
-            scanner_thread = threading.Thread(target=self.run_scanner, daemon=True)
-            scanner_thread.start()
-            self.log_message("Multi-Scanner Started - Terminal Edition", "success")
-
-    def stop(self):
-        """Stop the bot"""
-        self.running = False
-        self.position_manager.stop_monitoring()
-        self.log_message("Bot Stopped", "warning")
-
-def main():
-    """Main function to run the terminal app"""
-    # Clear screen and hide cursor
-    os.system('clear' if os.name == 'posix' else 'cls')
     
-    bot = CryptoSignalBot()
-    
-    # Start the bot
-    bot.start()
-    
-    try:
-        with Live(bot.render_dashboard(), refresh_per_second=2, screen=True) as live:
-            while True:
-                live.update(bot.render_dashboard())
-                time.sleep(0.5)
-                
-    except KeyboardInterrupt:
-        bot.stop()
-        bot.console.print("\n[red]Bot stopped by user[/red]")
-        sys.exit(0)
-
-if __name__ == '__main__':
-    main()
+    return conditions
