@@ -21,3 +21,9 @@ MIN_ORDER_BOOK_IMBALANCE = 1.1  # Relaxed from 1.3
 MIN_CORE_CONDITIONS = 4  # out of 5 core conditions
 MIN_RSI_OVERSOLD = 25
 MAX_RSI_OVERSOLD = 55  # Adaptive based on volatility
+
+# Technical Parameters
+MACD_CROSSOVER_THRESHOLD = 0.002  # How close to zero for MACD crossover detection
+STOCH_DEEP_OVERSOLD = 20          # Deep oversold threshold for stochastic
+STOCH_OVERSOLD = 30               # Regular oversold threshold for stochastic
+STOCH_RECOVERY = 40               # Upper bound for recovery phase

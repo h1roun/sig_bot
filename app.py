@@ -512,8 +512,11 @@ class CryptoSignalBot:
             data = self.current_data.get(symbol)
             if data:
                 conditions = self.check_strategy_conditions(data)
-                conditions_met = sum(conditions.values())
-                footer_text.append(f"Scanning: {self.current_scanning_symbol} ({conditions_met}/8) | ", style="yellow")
+                core_conditions = ['bb_touch', 'rsi_oversold', 'macd_momentum', 'stoch_recovery', 'trend_alignment']
+                core_conditions_met = sum(conditions[cond] for cond in core_conditions)
+                total_conditions = sum(conditions.values())
+                # Fixed to show correct condition count (5 core + 1 bonus)
+                footer_text.append(f"Scanning: {self.current_scanning_symbol} ({core_conditions_met}/5 core, {total_conditions}/6 total) | ", style="yellow")
             else:
                 footer_text.append(f"Scanning: {self.current_scanning_symbol} | ", style="yellow")
         else:
@@ -727,17 +730,25 @@ class CryptoSignalBot:
         # CORE CONDITION 2: RSI Oversold but not extreme (ADAPTIVE)
         conditions['rsi_oversold'] = data.rsi_5m < rsi_threshold and data.rsi_5m > 25
         
-        # CORE CONDITION 3: MACD Momentum Building (NEW)
-        # MACD histogram increasing (momentum building) OR MACD above signal
-        conditions['macd_momentum'] = (data.macd_histogram_5m > -0.001) or (data.macd_5m > data.macd_signal_5m)
+        # CORE CONDITION 3: MACD Momentum Building (FIXED)
+        # Check for MACD momentum - either rising histogram OR positive crossover
+        # Using "near zero and not deeply negative" is more reliable than just > -0.001
+        macd_near_crossover = data.macd_histogram_5m > -0.002 and data.macd_histogram_5m < 0.002
+        macd_positive_crossover = data.macd_5m > data.macd_signal_5m and data.macd_histogram_5m > 0
+        conditions['macd_momentum'] = macd_near_crossover or macd_positive_crossover
         
-        # CORE CONDITION 4: Stochastic Oversold Recovery (NEW)
-        # Stochastic oversold but showing signs of recovery
-        conditions['stoch_recovery'] = (data.stoch_k < 30 and data.stoch_k > data.stoch_d) or (data.stoch_k < 40 and data.stoch_k > 25)
+        # CORE CONDITION 4: Stochastic Oversold Recovery (FIXED)
+        # Three cases: 1) Deep oversold with recovery, 2) Moderate oversold with strong recovery, 3) Recovery from oversold
+        stoch_deep_oversold_recovering = data.stoch_k < 20 and data.stoch_k > data.stoch_d  # Deep oversold starting to recover
+        stoch_oversold_recovering = data.stoch_k < 30 and data.stoch_k > data.stoch_d * 1.05  # Oversold with clear recovery
+        stoch_recovering_momentum = data.stoch_k > 20 and data.stoch_k < 40 and data.stoch_k > data.stoch_d  # In recovery phase
+        conditions['stoch_recovery'] = stoch_deep_oversold_recovering or stoch_oversold_recovering or stoch_recovering_momentum
         
-        # CORE CONDITION 5: Trend Alignment (SIMPLIFIED)
-        # Price above EMA20 (15m) AND general uptrend OR strong bounce potential
-        trend_ok = (data.price > data.ema_20_15m * 0.998) or (data.btc_strength > 3 and data.btc_trend == "UP")
+        # CORE CONDITION 5: Trend Alignment (FIXED)
+        # Clearer check: Either price above/near EMA20 OR price showing strong recovery from support
+        near_ema = data.price > data.ema_20_15m * 0.996  # Price near or above EMA20
+        support_bounce = data.price > data.weekly_support * 1.01 and data.price < data.ema_20_15m * 0.99 and data.rsi_15m > 40
+        trend_ok = near_ema or support_bounce
         conditions['trend_alignment'] = trend_ok
         
         # BONUS CONDITION 6: Volume Confirmation (OPTIONAL - not required)
