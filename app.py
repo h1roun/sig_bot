@@ -894,6 +894,71 @@ class CryptoSignalBot:
         self.position_manager.stop_monitoring()
         self.log_message("Bot Stopped", "warning")
 
+    def create_signals_panel(self) -> Panel:
+        """Create recent signals panel with more details"""
+        table = Table(title="Recent Signals", box=box.SIMPLE)
+        table.add_column("Time", style="cyan", width=5)
+        table.add_column("Coin", style="white", width=6)
+        table.add_column("Level", style="white", width=5)
+        table.add_column("Entry", style="white", width=8)
+        
+        signal_alerts = [alert for alert in self.alerts if 'SIGNAL' in alert['message']][:6]
+        
+        for alert in signal_alerts:
+            message_parts = alert['message'].split()
+            if len(message_parts) >= 3:
+                coin = message_parts[1] if len(message_parts) > 1 else "N/A"
+                level = message_parts[-1] if "Level" in alert['message'] else "1"
+                entry = "Active" if "ENTRY" in alert['message'] else "N/A"
+                
+                table.add_row(
+                    alert['time'][:5],
+                    coin[:6],
+                    level,
+                    entry
+                )
+        
+        if not signal_alerts:
+            table.add_row("--:--", "None", "0", "Waiting")
+        
+        return Panel(table, style="yellow")
+
+    def create_logs_panel(self) -> Panel:
+        """Create enhanced logs panel with proper updating"""
+        table = Table(title="System Status", box=box.SIMPLE, show_header=False)
+        table.add_column("", style="cyan", width=5)
+        table.add_column("", style="white")
+        
+        # Show scan progress and system status with proper updates
+        if self.running:
+            # Calculate progress properly
+            total_symbols = len(self.scanning_symbols) if self.scanning_symbols else 35
+            scanned_symbols = len([s for s in self.scanning_symbols if s in self.current_data and self.current_data[s] is not None])
+            scan_progress = f"{scanned_symbols}/{total_symbols}"
+            
+            # Show current scanning status
+            if self.current_scanning_symbol:
+                current_status = f"Scanning {self.current_scanning_symbol}"
+            else:
+                current_status = "Between scans"
+            
+            table.add_row("Progress", scan_progress)
+            table.add_row("Status", current_status)
+            table.add_row("Cycles", str(self.scan_stats['scan_cycles']))
+            table.add_row("Signals", str(self.scan_stats['signals_found']))
+            
+            # Show latest scan time
+            if self.scan_stats['last_scan_time']:
+                last_scan = self.scan_stats['last_scan_time'].strftime('%H:%M:%S')
+                table.add_row("Last", last_scan)
+        else:
+            table.add_row("Status", "OFFLINE")
+            table.add_row("Scanned", "0/0")
+            table.add_row("Cycles", "0")
+            table.add_row("Signals", "0")
+        
+        return Panel(table, style="white")
+
 def main():
     """Main function to run the terminal app"""
     # Clear screen and hide cursor
