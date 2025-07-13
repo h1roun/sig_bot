@@ -3,7 +3,7 @@ TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
 
 # Trading Configuration
-MAX_CONCURRENT_POSITIONS = 5
+MAX_CONCURRENT_POSITIONS = 1  # Changed from 5 to 1 to only allow one position at a time
 
 # Scanner Configuration
 SCAN_INTERVAL = 12  # seconds between scan cycles

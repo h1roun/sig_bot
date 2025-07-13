@@ -30,24 +30,56 @@ class TelegramNotifier:
             print(f"❌ Telegram send error: {e}")
             return False
     
-    def send_signal_alert(self, signal: Dict) -> bool:
-        """Send trading signal alert for optimized strategy"""
+    def send_bot_status_update(self, status: str, details: str = "") -> bool:
+        """Send bot status update message"""
         try:
+            message = f"""
+🤖 **BOT STATUS UPDATE** 🤖
+
+📊 **Status:** {status}
+⏰ **Time:** {datetime.now().strftime('%H:%M:%S')}
+
+{details}
+            """.strip()
+            
+            return self.send_message(message)
+                
+        except Exception as e:
+            print(f"❌ Error sending bot status: {e}")
+            return False
+    
+    def send_signal_alert(self, signal: Dict) -> bool:
+        """Send trading signal alert for optimized strategy with error handling"""
+        try:
+            # Validate required fields are present
+            required_fields = ['coin', 'entry_price', 'tp1', 'tp2', 'stop_loss', 'entry_level']
+            for field in required_fields:
+                if field not in signal:
+                    print(f"❌ Missing field '{field}' in signal")
+                    return False
+            
+            # Extract values with fallbacks
             coin = signal['coin']
             entry_price = signal['entry_price']
             tp1 = signal['tp1']
             tp2 = signal['tp2']
             stop_loss = signal['stop_loss']
             entry_level = signal['entry_level']
-            confidence = signal['confidence']
-            
-            # New optimized strategy fields
+            confidence = signal.get('confidence', 85)
             signal_strength = signal.get('signal_strength', 5)
             core_conditions_met = signal.get('core_conditions_met', 4)
-            
             atr_value = signal.get('atr_value', 0)
             imbalance_ratio = signal.get('order_book_imbalance', 0)
             strategy_version = signal.get('strategy_version', 'v4_optimized')
+            
+            # Validate stop loss is below entry and take profit is above entry
+            if stop_loss >= entry_price or tp1 <= entry_price or tp2 <= entry_price:
+                print(f"❌ Invalid price levels: Entry=${entry_price}, SL=${stop_loss}, TP1=${tp1}, TP2=${tp2}")
+                
+                # Fix levels
+                stop_loss = min(stop_loss, entry_price * 0.985)
+                tp1 = max(tp1, entry_price * 1.02)
+                tp2 = max(tp2, entry_price * 1.035)
             
             tp1_profit = ((tp1 - entry_price) / entry_price) * 100
             tp2_profit = ((tp2 - entry_price) / entry_price) * 100
@@ -64,6 +96,7 @@ class TelegramNotifier:
                 strength_emoji = "🔥"
                 strength_text = "GOOD"
             
+            # Build message
             message = f"""
 🚨 **CRYPTO SIGNAL - OPTIMIZED** 🚨
 
@@ -104,7 +137,7 @@ class TelegramNotifier:
             return self.send_message(message)
             
         except Exception as e:
-            print(f"Error sending signal alert: {e}")
+            print(f"❌ Error sending signal alert: {e}")
             return False
     
     def send_position_update(self, symbol: str, status: str, price: float, pnl_percent: float) -> bool:

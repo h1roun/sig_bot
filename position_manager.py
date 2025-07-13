@@ -115,43 +115,44 @@ class PositionManager:
                     time.sleep(check_interval)
                     continue
                     
-                # Process each position
+                # Process each position - use a copy to prevent RuntimeError if dict changes during iteration
                 for symbol in list(self.active_positions.keys()):
                     try:
-                        # Only check prices that have been stable for at least check_interval seconds
+                        # Skip if position no longer exists (already closed)
+                        if symbol not in self.active_positions:
+                            continue
+                            
                         position = self.active_positions[symbol]
                         current_time = time.time()
                         
-                        # Skip if position was checked too recently (avoid spamming API)
+                        # Skip if position was checked too recently
                         if current_time - position.get('last_checked', 0) < check_interval:
                             continue
                             
                         # Get current price with retry
                         current_price = None
                         for attempt in range(3):  # Try up to 3 times
-                            try:
-                                current_price = self._get_current_price(symbol)
-                                if current_price and current_price > 0:
-                                    break
-                            except Exception:
-                                time.sleep(1)  # Wait 1 second before retry
+                            current_price = self._get_current_price(symbol)
+                            if current_price and current_price > 0:
+                                break
+                            time.sleep(1)  # Wait before retry
                         
-                        # If we couldn't get a price after retries, skip this position
-                        if not current_price or current_price <= 0:
-                            print(f"⚠️ Couldn't get price for {symbol}, skipping check")
+                        # If we couldn't get a valid price after retries, skip
+                        if not current_price or current_price <= 0 or pd.isna(current_price):
+                            print(f"⚠️ Couldn't get valid price for {symbol}, skipping check")
                             continue
                         
-                        # Update position and track we checked it
+                        # Update position
                         position['last_checked'] = current_time
                         position['price_checks'] += 1
                         
-                        # Keep last 10 price checks for debugging
+                        # Update price history (keep last 10)
                         position['price_history'].append({
                             'time': datetime.now().strftime('%H:%M:%S'),
                             'price': current_price
                         })
                         if len(position['price_history']) > 10:
-                            position['price_history'].pop(0)
+                            position['price_history'] = position['price_history'][-10:]
                         
                         # Process the price update
                         self.update_position_price(symbol, current_price)
@@ -160,6 +161,7 @@ class PositionManager:
                         print(f"❌ Error monitoring {symbol}: {e}")
                         continue
                         
+                # Add a small delay to prevent excessive CPU usage
                 time.sleep(check_interval)
                 
             except Exception as e:
@@ -192,12 +194,16 @@ class PositionManager:
         tp2 = position['tp2']
         stop_loss = position['stop_loss']
         
-        # Calculate current PnL with sanity check
-        if entry_price > 0:
-            price_change_percent = ((current_price - entry_price) / entry_price) * 100
-            remaining_factor = position['remaining_size'] / 100
-            position['unrealized_pnl'] = price_change_percent * remaining_factor
-            position['pnl_percent'] = position['realized_pnl'] + position['unrealized_pnl']
+        # Validate values to prevent calculation errors
+        if entry_price <= 0 or pd.isna(entry_price):
+            print(f"⚠️ Invalid entry price for {symbol}, skipping update")
+            return
+            
+        # Calculate current PnL
+        price_change_percent = ((current_price - entry_price) / entry_price) * 100
+        remaining_factor = position['remaining_size'] / 100
+        position['unrealized_pnl'] = price_change_percent * remaining_factor
+        position['pnl_percent'] = position['realized_pnl'] + position['unrealized_pnl']
         
         # Debug output every 20 checks
         if position['price_checks'] % 20 == 0:
@@ -297,6 +303,8 @@ class PositionManager:
 🛡️ **Remaining 25%:** Closed at breakeven
 
 ⏰ **Duration:** {self.get_position_duration(position)}
+
+🔍 **New signals scanning resumed**
             """.strip()
         else:
             position['status'] = 'STOP_LOSS'
@@ -316,6 +324,8 @@ class PositionManager:
 🛡️ **Stop Loss:** ${position['stop_loss']:.6f}
 
 ⏰ **Duration:** {self.get_position_duration(position)}
+
+🔍 **New signals scanning resumed**
             """.strip()
         
         self.complete_trade(symbol, position, position['status'])

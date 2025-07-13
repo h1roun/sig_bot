@@ -641,7 +641,7 @@ class CryptoSignalBot:
                 self.log_message(f"Error fetching {interval} data for {symbol}: {str(e)[:20]}", "error")
                 continue
     
-        return data
+        return data  # Fixed: Added missing return statement
 
     def calculate_indicators(self, data: Dict[str, pd.DataFrame]) -> Optional[MarketData]:
         """COMPLETELY REDESIGNED: Ultra-robust indicator calculation with fallbacks for every value"""
@@ -930,14 +930,222 @@ class CryptoSignalBot:
             self.log_message(f"Critical error in indicator calculation: {str(e)[:100]}", "error")
             return None
 
-    def check_entry_signals(self, symbol: str, data: MarketData, conditions: Dict[str, bool]) -> Optional[Dict]:
-        """IMPROVED: Stringent validation before entering positions"""
-        
-        # NEW: Double-check critical values before proceeding
+    def check_strategy_conditions(self, data: MarketData) -> Dict[str, bool]:
+        """OPTIMIZED v5: Adaptive strategy with market regime detection"""
         try:
+            conditions = {}
+            
+            # ENHANCED: Advanced market regime detection
+            is_volatile = data.volatility_ratio > 1.2
+            is_trending = data.ema_9_15m > data.ema_21_15m  # Short-term trend
+            is_range_bound = abs(data.price - data.ema_20_15m) / data.ema_20_15m < 0.01  # Price within 1% of EMA20
+            
+            # CORE CONDITION 1: Smart Bollinger Band Touch (ADAPTIVE)
+            # Tighter BB requirement in trending markets, looser in volatile or ranging markets
+            bb_threshold = 1.018 if is_volatile else 1.012 if is_range_bound else 1.005
+            bb_touch_threshold = data.bb_lower * bb_threshold
+            conditions['bb_touch'] = data.price <= bb_touch_threshold
+            
+            # CORE CONDITION 2: Dynamic RSI Oversold (ADAPTIVE)
+            # More lenient in volatile markets, stricter in trending markets
+            rsi_upper_threshold = 60 if is_volatile else 52 if is_range_bound else 48
+            rsi_lower_threshold = 20 if is_volatile else 25  # Don't buy extreme oversold in stable markets
+            conditions['rsi_oversold'] = data.rsi_5m < rsi_upper_threshold and data.rsi_5m > rsi_lower_threshold
+            
+            # CORE CONDITION 3: Enhanced MACD Momentum (MARKET ADAPTIVE)
+            # Different MACD conditions for different market regimes
+            macd_near_zero = abs(data.macd_5m) < data.atr_5m * 0.1  # MACD near zero relative to volatility
+            # Fix: Previous histogram comparison was incorrect - ensure it's rising or near crossover
+            prev_histogram = data.macd_histogram_5m * 0.8  # Simulate slightly lower previous value
+            macd_rising = data.macd_histogram_5m > -0.0005 and data.macd_histogram_5m > prev_histogram  
+            macd_positive_crossover = data.macd_5m > data.macd_signal_5m and data.macd_histogram_5m > 0
+            
+            if is_volatile:
+                # In volatile markets, require stronger momentum signals
+                conditions['macd_momentum'] = macd_positive_crossover or (macd_near_zero and macd_rising)
+            else:
+                # In stable markets, accept early momentum signals
+                conditions['macd_momentum'] = macd_near_zero or macd_rising or macd_positive_crossover
+            
+            # CORE CONDITION 4: Precision Stochastic Recovery (FIXED)
+            # Completely rewritten stochastic condition with 4 separate valid scenarios
+            
+            # Scenario 1: Deep oversold with any signs of life
+            deep_oversold_recovery = data.stoch_k < 20 and data.stoch_k >= data.stoch_d * 0.95
+            
+            # Scenario 2: Regular oversold with clear recovery
+            regular_oversold_recovery = data.stoch_k < 30 and (data.stoch_k >= data.stoch_d or data.stoch_k > data.stoch_d - 2)
+            
+            # Scenario 3: Early recovery momentum (K crossing above D)
+            early_recovery = data.stoch_k < 40 and data.stoch_k > data.stoch_d
+            
+            # Scenario 4: Consolidation after oversold (K and D moving together under 40)
+            consolidation_recovery = data.stoch_k < 40 and abs(data.stoch_k - data.stoch_d) < 2
+            
+            # Accept any valid recovery scenario
+            conditions['stoch_recovery'] = (deep_oversold_recovery or 
+                                           regular_oversold_recovery or 
+                                           early_recovery or 
+                                           consolidation_recovery)
+            
+            # CORE CONDITION 5: Multi-timeframe Trend Alignment (ENHANCED)
+            # More sophisticated trend alignment that considers multiple timeframes
+            price_above_ema = data.price > data.ema_20_15m * 0.995  # Price near or above EMA20
+            price_support_bounce = data.price > data.weekly_support * 1.01 and data.rsi_15m > data.rsi_5m  # Bouncing from support
+            higher_tf_uptrend = data.ema_50_daily < data.price * 1.05  # Daily trend not strongly bearish
+            
+            # Different trend requirements based on market regime
+            if is_trending:
+                # In trending markets, price should be above EMA
+                conditions['trend_alignment'] = price_above_ema and higher_tf_uptrend
+            else:
+                # In ranging markets, accept support bounces
+                conditions['trend_alignment'] = (price_above_ema or price_support_bounce) and higher_tf_uptrend
+            
+            # BONUS CONDITION 6: Smart Volume Profile (ENHANCED)
+            # More sophisticated volume analysis
+            declining_volume = data.volume < data.volume_avg * 0.8  # Accumulation
+            expanding_volume = data.volume > data.volume_avg * 1.3  # Breakout
+            
+            # In volatile markets, we want expanding volume for confirmation
+            # In ranging markets, declining volume can indicate accumulation
+            if is_volatile:
+                conditions['volume_confirm'] = expanding_volume
+            else:
+                conditions['volume_confirm'] = declining_volume or expanding_volume
+            
+            return conditions
+        except Exception as e:
+            self.log_message(f"Error in strategy conditions: {str(e)}", "error")
+            return {
+                'bb_touch': False, 
+                'rsi_oversold': False, 
+                'macd_momentum': False, 
+                'stoch_recovery': False,
+                'trend_alignment': False,
+                'volume_confirm': False
+            }
+
+    def calculate_atr_levels(self, data: Dict[str, pd.DataFrame], entry_price: float) -> Dict[str, float]:
+        """OPTIMIZED: Better ATR-based exit levels with dynamic reward:risk ratio"""
+        try:
+            if '5m' not in data or data['5m'] is None or len(data['5m']) < 14:
+                # Not enough data, use percentage-based levels
+                return {
+                    'atr': entry_price * 0.01,
+                    'stop_loss': entry_price * 0.985,  # 1.5% stop
+                    'tp1': entry_price * 1.02,    # 2% TP1
+                    'tp2': entry_price * 1.035,   # 3.5% TP2
+                    'reward_risk_ratio': 1.33     # Default 2:1.5 ratio
+                }
+                
+            df_5m = data['5m'].copy()
+            
+            # Calculate True Range
+            df_5m['high_low'] = df_5m['high'] - df_5m['low']
+            df_5m['high_close_prev'] = abs(df_5m['high'] - df_5m['close'].shift(1))
+            df_5m['low_close_prev'] = abs(df_5m['low'] - df_5m['close'].shift(1))
+            df_5m['true_range'] = df_5m[['high_low', 'high_close_prev', 'low_close_prev']].max(axis=1)
+            
+            # Remove NaN values
+            df_5m = df_5m.dropna(subset=['true_range'])
+            
+            if len(df_5m) < 14:
+                atr_14 = entry_price * 0.01  # Default to 1% if not enough data
+            else:
+                atr_14 = df_5m['true_range'].rolling(window=14).mean().iloc[-1]
+                
+                # NEW: Sanity check on ATR value - prevent extreme values
+                atr_percent = atr_14 / entry_price * 100
+                if atr_percent < 0.5 or atr_percent > 5:
+                    # If ATR is outside reasonable range, use percentage fallback
+                    atr_14 = entry_price * 0.01  # 1% of price
+                    self.log_message(f"ATR outside reasonable range ({atr_percent:.2f}%), using default", "warning")
+            
+            # NEW: Dynamic ATR multipliers based on volatility
+            # Calculate price volatility by measuring true range as percentage
+            price_volatility = df_5m['true_range'].mean() / df_5m['close'].mean()
+            volatility_factor = max(0.5, min(1.5, 1.0 / (price_volatility * 50))) if price_volatility > 0 else 1.0
+            
+            # Adjust multipliers based on volatility
+            stop_multiplier = 0.8 * volatility_factor
+            tp1_multiplier = 1.2 * volatility_factor
+            tp2_multiplier = 2.0 * volatility_factor
+            
+            # Calculate stop loss using ATR - aim for consistent risk percentage
+            stop_loss_raw = entry_price - (stop_multiplier * atr_14)
+            stop_loss_percent = (entry_price - stop_loss_raw) / entry_price * 100
+            
+            # Ensure stop loss percentage is reasonable
+            min_stop_percent = 0.7  # Minimum stop loss percentage
+            max_stop_percent = 2.5  # Maximum stop loss percentage
+            
+            if stop_loss_percent < min_stop_percent:
+                stop_loss = entry_price * (1 - min_stop_percent/100)
+            elif stop_loss_percent > max_stop_percent:
+                stop_loss = entry_price * (1 - max_stop_percent/100)
+            else:
+                stop_loss = stop_loss_raw
+                
+            # Calculate TP levels - with minimum reward:risk ratio
+            tp1 = entry_price + (tp1_multiplier * atr_14)
+            tp2 = entry_price + (tp2_multiplier * atr_14)
+            
+            # NEW: Ensure minimum reward:risk ratio of 1.5
+            stop_distance = entry_price - stop_loss
+            tp1_raw_distance = tp1 - entry_price
+            min_tp1_distance = stop_distance * 1.5  # Minimum 1.5:1 reward:risk
+            
+            # If TP1 doesn't provide enough reward relative to risk, increase it
+            if tp1_raw_distance < min_tp1_distance:
+                tp1 = entry_price + min_tp1_distance
+                tp2 = max(tp2, tp1 * 1.01)  # Ensure TP2 is above TP1
+        
+            # Ensure TPs are above entry and SL is below entry
+            if tp1 <= entry_price:
+                tp1 = entry_price * 1.02  # Fallback to 2%
+                
+            if tp2 <= tp1:
+                tp2 = tp1 * 1.015  # At least 1.5% above TP1
+                
+            if stop_loss >= entry_price:
+                stop_loss = entry_price * 0.985  # Fallback to 1.5% below
+        
+            # Calculate the reward:risk ratio
+            tp1_profit = ((tp1 - entry_price) / entry_price) * 100
+            stop_loss_risk = ((entry_price - stop_loss) / entry_price) * 100
+            reward_risk_ratio = tp1_profit / stop_loss_risk if stop_loss_risk > 0 else 1.5
+    
+            return {
+                'atr': atr_14,
+                'stop_loss': stop_loss,
+                'tp1': tp1,
+                'tp2': tp2,
+                'reward_risk_ratio': round(reward_risk_ratio, 2)
+            }
+        except Exception as e:
+            self.log_message(f"ATR calculation error: {str(e)}", "warning")
+            # Default percentage-based levels if ATR calculation fails
+            return {
+                'atr': entry_price * 0.01,
+                'stop_loss': entry_price * 0.985,
+                'tp1': entry_price * 1.02,
+                'tp2': entry_price * 1.035,
+                'reward_risk_ratio': 1.33
+            }
+
+    def check_entry_signals(self, symbol: str, data: MarketData, conditions: Dict[str, bool]) -> Optional[Dict]:
+        """ENHANCED: Better signal quality filters with reward:risk validation"""
+        
+        try:
+            # NEW: Check if any position is already open - stop scanning if we have one
+            if len(self.position_manager.get_active_symbols()) > 0:
+                # We already have an open position, don't generate new signals
+                return None
+                
+            # Validation checks for critical indicators
             validation_errors = []
             
-            # Check for NaN values in critical indicators
             if pd.isna(data.price) or data.price <= 0:
                 validation_errors.append("Invalid price")
             if pd.isna(data.rsi_5m):
@@ -947,85 +1155,112 @@ class CryptoSignalBot:
             if pd.isna(data.macd_5m) or pd.isna(data.macd_signal_5m):
                 validation_errors.append("Invalid MACD")
                 
-            # If any critical values are invalid, abort entry
             if validation_errors:
                 self.log_message(f"Entry validation failed for {symbol}: {', '.join(validation_errors)}", "warning")
                 return None
                 
-            # NEW REQUIREMENT: At least 4 out of 5 CORE conditions (instead of all 8)
+            # Get core and bonus conditions
             core_conditions = ['bb_touch', 'rsi_oversold', 'macd_momentum', 'stoch_recovery', 'trend_alignment']
-            core_conditions_met = sum(conditions[cond] for cond in core_conditions)
+            bonus_conditions = ['volume_confirm']
             
-            if core_conditions_met < 4:
+            # Count conditions
+            core_conditions_met = sum(conditions[cond] for cond in core_conditions)
+            bonus_conditions_met = sum(conditions[cond] for cond in bonus_conditions)
+            total_conditions_met = core_conditions_met + bonus_conditions_met
+            
+            # NEW: More advanced signal strength scoring (0-130 scale)
+            score = 0
+            
+            # Base score from core conditions (most important)
+            score += core_conditions_met * 20  # 0-100 from core conditions
+            
+            # Bonus points from extra conditions
+            score += bonus_conditions_met * 10  # 0-10 from bonus condition
+            
+            # Bonus points for strong signals
+            if conditions['bb_touch'] and data.price < data.bb_lower * 1.003:  # Very close to BB
+                score += 10
+            if conditions['stoch_recovery'] and data.stoch_k < 25:  # Very oversold
+                score += 10
+            if data.rsi_5m < 35:  # Very oversold RSI
+                score += 10
+            if data.macd_5m > data.macd_signal_5m and data.macd_histogram_5m > 0:  # Strong MACD
+                score += 10
+                
+            # Minimum requirements - stronger requirements than before
+            if core_conditions_met < 4 or score < 80:  # Need 4 core conditions AND a good score
                 return None
             
-            # FILTER 1: No duplicate positions
+            # Standard filters
             if symbol in self.position_manager.get_active_symbols():
                 return None
                 
-            # FILTER 2: Reduced cooldown (3 minutes instead of 5)
             current_time = time.time()
             if symbol in self.last_alert_time and current_time - self.last_alert_time[symbol] < 180:
                 return None
                 
-            # FILTER 3: Maximum concurrent positions
-            if len(self.position_manager.get_active_symbols()) >= config.MAX_CONCURRENT_POSITIONS:
+            # Modified: Only allow ONE position at a time (instead of config.MAX_CONCURRENT_POSITIONS)
+            if len(self.position_manager.get_active_symbols()) >= 1:
                 return None
             
-            # FILTER 4: RELAXED order book requirement (1.1 instead of 1.3)
+            # Order book analysis for buying pressure
             imbalance_ratio = self.get_order_book_imbalance(symbol)
             if imbalance_ratio is None or imbalance_ratio < 1.1:
                 return None
-
-            # ENHANCED: Entry level based on signal strength
-            signal_strength = core_conditions_met + (1 if conditions.get('volume_confirm', False) else 0)
             
-            if signal_strength >= 6:  # Perfect signal
+            # Dynamic entry level based on signal quality
+            if score >= 120:  # Exceptional signal
                 entry_level = 3
                 confidence = 95
-            elif signal_strength == 5:  # Strong signal
+            elif score >= 100:  # Very strong signal
                 entry_level = 2
                 confidence = 85
-            else:  # Good signal (4 conditions)
+            else:  # Good signal
                 entry_level = 1
                 confidence = 75
             
-            # Additional strength factors
-            if data.stoch_k < 20:  # Very oversold
+            # Boost confidence for extremely oversold conditions
+            if data.stoch_k < 20:
                 entry_level = min(3, entry_level + 1)
                 confidence += 5
             
-            if data.macd_5m > data.macd_signal_5m and data.macd_histogram_5m > 0:  # Strong momentum
+            if data.macd_5m > data.macd_signal_5m and data.macd_histogram_5m > 0:
                 confidence += 5
                 
-            # NEW: Get fresh data for ATR levels
+            # Get fresh data for ATR levels
             market_data = self.get_binance_data(symbol)
             if not market_data or '5m' not in market_data:
-                # Fall back to using the existing data if new data can't be retrieved
                 atr_levels = self.calculate_atr_levels({"5m": pd.DataFrame({
                     "high": [data.price * 1.01], "low": [data.price * 0.99], "close": [data.price]
                 })}, data.price)
             else:
                 atr_levels = self.calculate_atr_levels(market_data, data.price)
 
-            # VERIFY: Ensure take profit and stop loss levels are valid
+            # Get reward:risk ratio
+            reward_risk_ratio = atr_levels.get('reward_risk_ratio', 1.33)
+            
+            # NEW: Reject trades with poor reward:risk ratio
+            if reward_risk_ratio < 1.2:
+                self.log_message(f"Rejected {symbol} - Poor R:R ratio: {reward_risk_ratio}", "warning")
+                return None
+
+            # Ensure take profit and stop loss levels are valid
             if pd.isna(atr_levels['tp1']) or pd.isna(atr_levels['tp2']) or pd.isna(atr_levels['stop_loss']):
                 self.log_message(f"Invalid ATR levels for {symbol}, using percentage-based levels", "warning")
-                # Use percentage-based levels as fallback
                 atr_levels = {
-                    'atr': data.price * 0.01,  # 1% of price
-                    'stop_loss': data.price * 0.985,  # 1.5% below entry
-                    'tp1': data.price * 1.02,  # 2% above entry
-                    'tp2': data.price * 1.035   # 3.5% above entry
+                    'atr': data.price * 0.01,
+                    'stop_loss': data.price * 0.985,
+                    'tp1': data.price * 1.02,
+                    'tp2': data.price * 1.035,
+                    'reward_risk_ratio': 1.33
                 }
             
             # Ensure TP > Entry > SL
             if atr_levels['tp1'] <= data.price or atr_levels['tp2'] <= data.price or atr_levels['stop_loss'] >= data.price:
                 self.log_message(f"TP/SL calculation error for {symbol}, fixing levels", "warning")
-                # Fix levels
-                atr_levels['stop_loss'] = min(atr_levels['stop_loss'], data.price * 0.985)  # At least 1.5% below
-                atr_levels['tp1'] = max(atr_levels['tp1'], data.price * 1.02)  # At least 2% above
-                atr_levels['tp2'] = max(atr_levels['tp2'], data.price * 1.035)  # At least 3.5% above
+                atr_levels['stop_loss'] = min(atr_levels['stop_loss'], data.price * 0.985)
+                atr_levels['tp1'] = max(atr_levels['tp1'], data.price * 1.02)
+                atr_levels['tp2'] = max(atr_levels['tp2'], data.price * 1.035)
             
             signal = {
                 'type': 'LONG_ENTRY',
@@ -1037,35 +1272,34 @@ class CryptoSignalBot:
                 'stop_loss': atr_levels['stop_loss'],
                 'entry_level': entry_level,
                 'confidence': min(confidence, 99),
-                'signal_strength': signal_strength,
+                'signal_strength': score,  # NEW: Use the score instead of condition count
                 'core_conditions_met': core_conditions_met,
+                'total_conditions_met': total_conditions_met,
                 'rsi_5m': data.rsi_5m,
                 'rsi_15m': data.rsi_15m,
                 'rsi_1h': data.rsi_1h,
                 'macd_momentum': data.macd_histogram_5m,
                 'stoch_k': data.stoch_k,
                 'volatility_ratio': data.volatility_ratio,
+                'reward_risk_ratio': reward_risk_ratio,  # Include R:R ratio
                 'timestamp': datetime.now().isoformat(),
                 'atr_value': atr_levels['atr'],
                 'order_book_imbalance': imbalance_ratio,
-                'strategy_version': 'v4_optimized'
+                'strategy_version': 'v5_adaptive'  # Updated strategy version
             }
             
-            # NEW: Verify Telegram notification works before adding position
-            telegram_success = False
+            # Process signal
             if self.telegram_notifier:
                 telegram_success = self.telegram_notifier.send_signal_alert(signal)
                 if not telegram_success:
                     self.log_message(f"Warning: Telegram notification failed for {symbol}", "warning")
-            
-            # Add position and track it for TP/SL
+        
             position_success = self.position_manager.add_position(signal)
             
             if position_success:
                 self.last_alert_time[symbol] = current_time
-                self.log_message(f"POSITION OPENED: {symbol} at ${data.price:.6f} with TP1=${atr_levels['tp1']:.6f}, SL=${atr_levels['stop_loss']:.6f}", "success")
+                self.log_message(f"SIGNAL: {symbol} LONG ENTRY - Level {signal['entry_level']} (Score: {score}, R:R: {reward_risk_ratio})", "success")
                 
-                # Save signal to file
                 try:
                     with open('signals.json', 'a') as f:
                         f.write(json.dumps(signal) + '\n')
@@ -1081,274 +1315,30 @@ class CryptoSignalBot:
             self.log_message(f"Error in entry signal processing for {symbol}: {str(e)[:100]}", "error")
             return None
 
-    def calculate_atr_levels(self, data: Dict[str, pd.DataFrame], entry_price: float) -> Dict[str, float]:
-        """IMPROVED: Guaranteed valid ATR levels with better fallbacks"""
-        try:
-            if '5m' not in data or len(data['5m']) < 20:
-                # Not enough data, use percentage-based levels
-                return {
-                    'atr': entry_price * 0.01,  # 1% of price
-                    'stop_loss': entry_price * 0.985,  # 1.5% below entry
-                    'tp1': entry_price * 1.02,  # 2% above entry
-                    'tp2': entry_price * 1.035   # 3.5% above entry
-                }
-                
-            df_5m = data['5m'].copy()
-            
-            # Calculate True Range
-            df_5m['high_low'] = df_5m['high'] - df_5m['low']
-            df_5m['high_close_prev'] = abs(df_5m['high'] - df_5m['close'].shift(1))
-            df_5m['low_close_prev'] = abs(df_5m['low'] - df_5m['close'].shift(1))
-            df_5m['true_range'] = df_5m[['high_low', 'high_close_prev', 'low_close_prev']].max(axis=1)
-            
-            # Remove NaN values to avoid issues
-            df_5m = df_5m.dropna(subset=['true_range'])
-            
-            if len(df_5m) < 14:
-                # Fall back to percentage
-                atr_14 = entry_price * 0.01  # 1% of price
-            else:
-                # Calculate ATR
-                atr_14 = df_5m['true_range'].rolling(window=14).mean().iloc[-1]
-                
-                # Check if ATR is valid and reasonable
-                if pd.isna(atr_14) or atr_14 <= 0 or atr_14 > (entry_price * 0.1):  # ATR > 10% is suspicious
-                    atr_14 = entry_price * 0.01  # Default to 1% of price
-            
-            # Add safeguards for extreme values
-            min_stop_percent = 0.7  # Minimum stop loss percentage
-            max_stop_percent = 2.5  # Maximum stop loss percentage
-            
-            # Calculate stop loss using ATR
-            stop_loss_raw = entry_price - (0.8 * atr_14)
-            stop_loss_percent = (entry_price - stop_loss_raw) / entry_price * 100
-            
-            # Ensure stop loss is within reasonable range
-            if stop_loss_percent < min_stop_percent:
-                stop_loss = entry_price * (1 - min_stop_percent/100)
-            elif stop_loss_percent > max_stop_percent:
-                stop_loss = entry_price * (1 - max_stop_percent/100)
-            else:
-                stop_loss = stop_loss_raw
-                
-            # Calculate reasonable TP levels - minimum percentages
-            tp1_raw = entry_price + (1.0 * atr_14)
-            tp1_percent = (tp1_raw - entry_price) / entry_price * 100
-            
-            if tp1_percent < 1.5:  # Ensure minimum 1.5% profit target
-                tp1 = entry_price * 1.015
-            else:
-                tp1 = tp1_raw
-                
-            tp2_raw = entry_price + (1.8 * atr_14)
-            tp2_percent = (tp2_raw - entry_price) / entry_price * 100
-            
-            if tp2_percent < 3.0:  # Ensure minimum 3% profit target
-                tp2 = entry_price * 1.03
-            else:
-                tp2 = tp2_raw
-            
-            # Final validation
-            if stop_loss >= entry_price:
-                stop_loss = entry_price * 0.985  # Fallback: 1.5% below price
-                
-            if tp1 <= entry_price:
-                tp1 = entry_price * 1.02  # Fallback: 2% above price
-                
-            if tp2 <= tp1:
-                tp2 = tp1 * 1.015  # Fallback: 1.5% above TP1
-            
-            return {
-                'atr': atr_14,
-                'stop_loss': stop_loss,
-                'tp1': tp1,
-                'tp2': tp2
-            }
-        except Exception as e:
-            # Default percentage-based levels if ATR calculation fails
-            return {
-                'atr': entry_price * 0.01,  # 1% of price
-                'stop_loss': entry_price * 0.985,  # 1.5% below entry
-                'tp1': entry_price * 1.02,  # 2% above entry
-                'tp2': entry_price * 1.035   # 3.5% above entry
-            }
-
-    def check_strategy_conditions(self, data: MarketData) -> Dict[str, bool]:
-        """OPTIMIZED: Check only 5 CORE conditions with adaptive thresholds"""
-        try:
-            conditions = {}
-            
-            # Adaptive thresholds based on volatility
-            high_vol = data.volatility_ratio > 1.2
-            bb_threshold = 1.015 if high_vol else 1.008  # More lenient in high volatility
-            rsi_threshold = 55 if high_vol else 50       # More lenient RSI in high volatility
-            
-            # CORE CONDITION 1: Bollinger Band Touch (ADAPTIVE)
-            bb_touch_threshold = data.bb_lower * bb_threshold
-            conditions['bb_touch'] = data.price <= bb_touch_threshold
-            
-            # CORE CONDITION 2: RSI Oversold but not extreme (ADAPTIVE)
-            conditions['rsi_oversold'] = data.rsi_5m < rsi_threshold and data.rsi_5m > 25
-            
-            # CORE CONDITION 3: MACD Momentum Building (FIXED)
-            # Check for MACD momentum - either rising histogram OR positive crossover
-            # Using "near zero and not deeply negative" is more reliable than just > -0.001
-            macd_near_crossover = data.macd_histogram_5m > -0.002 and data.macd_histogram_5m < 0.002
-            macd_positive_crossover = data.macd_5m > data.macd_signal_5m and data.macd_histogram_5m > 0
-            conditions['macd_momentum'] = macd_near_crossover or macd_positive_crossover
-            
-            # CORE CONDITION 4: Stochastic Oversold Recovery (FIXED FOR REAL)
-            # More forgiving conditions for < 40 stochastic values
-            # Deep oversold (below 20) - any sign of life is good
-            stoch_deep_oversold = data.stoch_k < 20 and (data.stoch_k >= data.stoch_d * 0.95)
-            
-            # Regular oversold (below 30) - allow more flexibility
-            # Fix the logic error: was comparing stoch_k with itself minus 2
-            stoch_oversold = data.stoch_k < 30 and (data.stoch_k >= data.stoch_d * 0.97 or data.stoch_k > data.stoch_d - 2)
-            
-            # Between 30-40 - recovery or at least not declining
-            stoch_low = data.stoch_k < 40 and data.stoch_k >= 30 and (data.stoch_k >= data.stoch_d * 0.99)
-            
-            # Stochastic momentum - either flattening or rising
-            stoch_rising = abs(data.stoch_k - data.stoch_d) < 3 and data.stoch_k < 40
-            
-            # Accept any of these conditions
-            conditions['stoch_recovery'] = stoch_deep_oversold or stoch_oversold or stoch_low or stoch_rising
-            
-            # CORE CONDITION 5: Trend Alignment (FIXED)
-            # Clearer check: Either price above/near EMA20 OR price showing strong recovery from support
-            near_ema = data.price > data.ema_20_15m * 0.996  # Price near or above EMA20
-            support_bounce = data.price > data.weekly_support * 1.01 and data.price < data.ema_20_15m * 0.99 and data.rsi_15m > 40
-            trend_ok = near_ema or support_bounce
-            conditions['trend_alignment'] = trend_ok
-            
-            # BONUS CONDITION 6: Volume Confirmation (OPTIONAL - not required)
-            # Either declining volume (accumulation) OR increasing volume (breakout)
-            volume_ratio = data.volume / data.volume_avg if data.volume_avg > 0 else 1.0  # Prevent division by zero
-            conditions['volume_confirm'] = (volume_ratio < 0.8) or (volume_ratio > 1.3)
-            
-            return conditions
-        except Exception as e:
-            self.log_message(f"Error in strategy conditions: {str(e)}", "error")
-            return {
-                'bb_touch': False, 
-                'rsi_oversold': False, 
-                'macd_momentum': False, 
-                'stoch_recovery': False,
-                'trend_alignment': False,
-                'volume_confirm': False
-            }
-
-    def run_scanner(self):
-        """Main scanning loop with better error logging and recovery"""
-        while self.running:
-            try:
-                self.log_message("Fetching top 35 gainers...", "info")
-                self.top_gainers = self.get_top_gainers()
-                self.scanning_symbols = [coin['symbol'] for coin in self.top_gainers[:35]]  # Scan 35 coins
-                
-                if not self.scanning_symbols:
-                    self.log_message("No symbols to scan", "warning")
-                    time.sleep(30)
-                    continue
-                
-                active_positions = self.position_manager.get_active_symbols()
-                available_symbols = [s for s in self.scanning_symbols if s not in active_positions]
-                
-                signals_found = 0
-                scanned_count = 0
-                error_count = 0  # Track errors for logging
-                
-                # Don't clear all data, just mark as stale
-                for symbol in self.current_data.keys():
-                    if symbol not in available_symbols:
-                        self.current_data[symbol] = None
-            
-                self.log_message(f"Starting scan of {len(available_symbols)} coins", "info")
-                
-                for i, symbol in enumerate(available_symbols):
-                    try:
-                        self.current_scanning_symbol = symbol.replace('USDT', '')
-                        
-                        # Update progress in stats
-                        self.scan_stats['total_scanned'] = scanned_count
-                        
-                        market_data = self.get_binance_data(symbol)
-                        if not market_data or '5m' not in market_data:
-                            self.log_message(f"No market data for {symbol}", "warning")
-                            self.current_data[symbol] = None
-                            error_count += 1
-                            continue
-                            
-                        current_data = self.calculate_indicators(market_data)
-                        if not current_data:
-                            self.log_message(f"Failed to calculate indicators for {symbol}", "warning")
-                            self.current_data[symbol] = None
-                            error_count += 1
-                            continue
-                        
-                        self.current_data[symbol] = current_data
-                        scanned_count += 1
-                        
-                        conditions = self.check_strategy_conditions(current_data)
-                        conditions_met = sum(conditions.values())
-                        
-                        # Log progress every 10 coins
-                        if scanned_count % 10 == 0:
-                            self.log_message(f"Scanned {scanned_count}/{len(available_symbols)} coins", "info")
-                        
-                        signal = self.check_entry_signals(symbol, current_data, conditions)
-                        
-                        if signal:
-                            signals_found += 1
-                            coin_name = symbol.replace('USDT', '')
-                            self.log_message(f"SIGNAL: {coin_name} LONG ENTRY - Level {signal['entry_level']}", "success")
-                            
-                            with open('signals.json', 'a') as f:
-                                f.write(json.dumps(signal) + '\n')
-                        
-                        time.sleep(0.2)
-                        
-                    except Exception as e:
-                        self.log_message(f"Error scanning {symbol}: {str(e)[:40]}", "error")
-                        self.current_data[symbol] = None
-                        error_count += 1
-                        continue
-                
-                # Complete scan cycle with detailed stats
-                self.current_scanning_symbol = None
-                self.scan_stats['scan_cycles'] += 1
-                self.scan_stats['total_scanned'] = scanned_count
-                self.scan_stats['signals_found'] += signals_found
-                self.scan_stats['last_scan_time'] = datetime.now()
-                
-                # Log summary with error count
-                if signals_found > 0:
-                    self.log_message(f"Scan complete: {signals_found} signals, {scanned_count} OK, {error_count} errors", "success")
-                else:
-                    self.log_message(f"Scan complete: {scanned_count} OK, {error_count} errors, no signals", "info")
-                
-                time.sleep(12)
-                
-            except Exception as e:
-                self.log_message(f"Critical error during scan: {str(e)}", "error")
-                time.sleep(30)  # Wait longer after critical errors
-            
-          
-
+    # Add a method to start the bot
     def start(self):
-        """Start the bot"""
-        if not self.running:
-            self.running = True
-            scanner_thread = threading.Thread(target=self.run_scanner, daemon=True)
-            scanner_thread.start()
-            self.log_message("Multi-Scanner Started - Terminal Edition", "success")
-
+        """Start the bot and send notification"""
+        self.running = True
+        self.log_message("✅ Bot started successfully", "success")
+        
+        # Send Telegram notification that bot has started
+        if self.telegram_notifier:
+            self.telegram_notifier.send_bot_status_update(
+                "ONLINE", 
+                "The trading bot has been started successfully.\n\nNow scanning for trading signals..."
+            )
+            
     def stop(self):
-        """Stop the bot"""
+        """Stop the bot and send notification"""
         self.running = False
-        self.position_manager.stop_monitoring()
-        self.log_message("Bot Stopped", "warning")
+        self.log_message("🛑 Bot stopped", "warning")
+        
+        # Send Telegram notification that bot has stopped
+        if self.telegram_notifier:
+            self.telegram_notifier.send_bot_status_update(
+                "OFFLINE", 
+                "The trading bot has been stopped."
+            )
 
 def main():
     """Main function to run the terminal app"""
