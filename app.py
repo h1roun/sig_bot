@@ -1523,6 +1523,33 @@ class CryptoSignalBot:
                 
         self.log_message("🛑 Scanner loop stopped", "warning")
 
+    def get_order_book_imbalance(self, symbol: str) -> Optional[float]:
+        """Get order book buy/sell ratio to detect buying pressure"""
+        try:
+            url = f"https://api.binance.com/api/v3/depth?symbol={symbol}&limit=50"
+            response = requests.get(url, headers=self.headers, timeout=5)
+            if response.status_code != 200:
+                return None
+
+            data = response.json()
+            bids = [(float(price), float(qty)) for price, qty in data.get('bids', [])]
+            asks = [(float(price), float(qty)) for price, qty in data.get('asks', [])]
+
+            if not bids or not asks:
+                return None
+
+            bid_volume = sum(qty for _, qty in bids)
+            ask_volume = sum(qty for _, qty in asks)
+
+            if ask_volume == 0:
+                return 10.0  # Arbitrary high value if no asks
+
+            return bid_volume / ask_volume
+
+        except Exception as e:
+            self.log_message(f"Order book error for {symbol}: {str(e)[:30]}", "warning")
+            return None
+
 def main():
     """Main function to run the terminal app"""
     # Clear screen and hide cursor
