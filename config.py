@@ -1,6 +1,6 @@
 # Telegram Configuration
-TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
-TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
+TELEGRAM_BOT_TOKEN = "7858800064:AAEhJVfdklh_JHIglWDb4ivQo0KFKRZQ7_o"  # Get from @BotFather
+TELEGRAM_CHAT_ID = "5943535144"
 
 # Trading Configuration
 MAX_CONCURRENT_POSITIONS = 1  # Changed from 5 to 1 to only allow one position at a time

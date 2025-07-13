@@ -1327,7 +1327,7 @@ class CryptoSignalBot:
                 "ONLINE", 
                 "The trading bot has been started successfully.\n\nNow scanning for trading signals..."
             )
-            
+    
     def stop(self):
         """Stop the bot and send notification"""
         self.running = False
@@ -1339,6 +1339,88 @@ class CryptoSignalBot:
                 "OFFLINE", 
                 "The trading bot has been stopped."
             )
+    
+    def start_scanning(self):
+        """Start the scanning process in a separate thread"""
+        if not hasattr(self, 'scan_thread') or not self.scan_thread.is_alive():
+            self.scan_thread = threading.Thread(target=self.scanning_loop, daemon=True)
+            self.scan_thread.start()
+            self.log_message("🔍 Scanner thread started", "success")
+    
+    def scanning_loop(self):
+        """Main scanning loop that runs continuously while the bot is running"""
+        self.log_message("🔄 Starting scanning loop...", "info")
+        
+        while self.running:
+            try:
+                # Skip scanning if we have an open position
+                if len(self.position_manager.get_active_symbols()) > 0:
+                    self.log_message("⏸️ Position active, pausing scanner", "info")
+                    time.sleep(config.SCAN_INTERVAL)
+                    continue
+                    
+                # Fetch top gainers
+                self.top_gainers = self.get_top_gainers()
+                if not self.top_gainers:
+                    self.log_message("⚠️ Failed to get gainers, retrying...", "warning")
+                    time.sleep(config.SCAN_INTERVAL)
+                    continue
+                    
+                # Extract symbols
+                self.scanning_symbols = [gainer['symbol'] for gainer in self.top_gainers]
+                
+                # Scan each symbol
+                for symbol in self.scanning_symbols:
+                    if not self.running:
+                        break
+                        
+                    try:
+                        self.current_scanning_symbol = symbol.replace('USDT', '')
+                        
+                        # Get market data
+                        market_data = self.get_binance_data(symbol)
+                        if not market_data:
+                            continue
+                            
+                        # Calculate indicators
+                        data = self.calculate_indicators(market_data)
+                        if not data:
+                            continue
+                            
+                        # Store data
+                        self.current_data[symbol] = data
+                        
+                        # Check signals
+                        conditions = self.check_strategy_conditions(data)
+                        signal = self.check_entry_signals(symbol, data, conditions)
+                        
+                        if signal:
+                            self.scan_stats['signals_found'] += 1
+                            
+                        # Update scan stats
+                        self.scan_stats['total_scanned'] += 1
+                        
+                        # Delay between checks to avoid rate limits
+                        time.sleep(1)
+                        
+                    except Exception as e:
+                        self.log_message(f"Error scanning {symbol}: {str(e)[:50]}", "error")
+                        continue
+                
+                # Scan cycle complete
+                self.current_scanning_symbol = None
+                self.scan_stats['scan_cycles'] += 1
+                self.scan_stats['last_scan_time'] = datetime.now()
+                self.log_message(f"✅ Scan cycle #{self.scan_stats['scan_cycles']} complete", "success")
+                
+                # Wait before starting next cycle
+                time.sleep(config.SCAN_INTERVAL)
+                
+            except Exception as e:
+                self.log_message(f"❌ Scanning error: {str(e)[:100]}", "error")
+                time.sleep(config.SCAN_INTERVAL)
+                
+        self.log_message("🛑 Scanner loop stopped", "warning")
 
 def main():
     """Main function to run the terminal app"""
@@ -1349,6 +1431,9 @@ def main():
     
     # Start the bot
     bot.start()
+    
+    # Start the scanning process
+    bot.start_scanning()
     
     try:
         with Live(bot.render_dashboard(), refresh_per_second=2, screen=True) as live:
