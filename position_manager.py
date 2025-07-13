@@ -3,6 +3,7 @@ import threading
 from datetime import datetime
 from typing import Dict, List, Optional
 import requests
+import pandas as pd
 
 class PositionManager:
     def __init__(self, telegram_notifier=None):
@@ -30,41 +31,58 @@ class PositionManager:
             'profit_factor': 0.0
         }
 
-    def add_position(self, signal: Dict):
-        """Add new position from signal"""
-        position = {
-            'symbol': signal['symbol'],
-            'coin': signal['coin'],
-            'entry_price': signal['entry_price'],
-            'current_price': signal['entry_price'],
-            'tp1': signal['tp1'],
-            'tp2': signal['tp2'],
-            'stop_loss': signal['stop_loss'],
-            'original_stop_loss': signal['stop_loss'],
-            'entry_level': signal['entry_level'],
-            'position_size': self.get_position_size(signal['entry_level']),  # Add this
-            'confidence': signal['confidence'],
-            'entry_time': datetime.now().strftime('%H:%M:%S'),
-            'entry_timestamp': time.time(),
-            'status': 'ACTIVE',
-            'tp1_hit': False,
-            'tp2_hit': False,
-            'sl_hit': False,
-            'breakeven_set': False,
-            'remaining_size': 100,
-            'realized_pnl': 0.0,
-            'unrealized_pnl': 0.0,
-            'pnl_percent': 0.0,
-            'atr_value': signal.get('atr_value', 0),
-            'order_book_imbalance': signal.get('order_book_imbalance', 0)
-        }
-        
-        self.active_positions[signal['symbol']] = position
-        
-        if not self.monitoring:
-            self.start_monitoring()
-        
-        print(f"✅ Position added: {signal['coin']} at ${signal['entry_price']:.6f}")
+    def add_position(self, signal: Dict) -> bool:
+        """Add new position from signal with validation"""
+        try:
+            # Validate critical position fields
+            required_fields = ['symbol', 'coin', 'entry_price', 'tp1', 'tp2', 'stop_loss']
+            for field in required_fields:
+                if field not in signal or pd.isna(signal[field]) or signal[field] <= 0:
+                    print(f"❌ Invalid position data - missing or invalid {field}")
+                    return False
+            
+            position = {
+                'symbol': signal['symbol'],
+                'coin': signal['coin'],
+                'entry_price': signal['entry_price'],
+                'current_price': signal['entry_price'],
+                'tp1': signal['tp1'],
+                'tp2': signal['tp2'],
+                'stop_loss': signal['stop_loss'],
+                'original_stop_loss': signal['stop_loss'],
+                'entry_level': signal['entry_level'],
+                'position_size': self.get_position_size(signal['entry_level']),
+                'confidence': signal['confidence'],
+                'entry_time': datetime.now().strftime('%H:%M:%S'),
+                'entry_timestamp': time.time(),
+                'status': 'ACTIVE',
+                'tp1_hit': False,
+                'tp2_hit': False,
+                'sl_hit': False,
+                'breakeven_set': False,
+                'remaining_size': 100,
+                'realized_pnl': 0.0,
+                'unrealized_pnl': 0.0,
+                'pnl_percent': 0.0,
+                'atr_value': signal.get('atr_value', 0),
+                'order_book_imbalance': signal.get('order_book_imbalance', 0),
+                'last_checked': time.time(),  # NEW: track last time price was checked
+                'price_checks': 0,  # NEW: count price checks for debugging
+                'price_history': []  # NEW: keep last 10 price checks for debugging
+            }
+            
+            self.active_positions[signal['symbol']] = position
+            
+            if not self.monitoring:
+                self.start_monitoring()
+            
+            print(f"✅ Position added: {signal['coin']} at ${signal['entry_price']:.6f}")
+            print(f"   TP1: ${position['tp1']:.6f}, TP2: ${position['tp2']:.6f}, SL: ${position['stop_loss']:.6f}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error adding position: {e}")
+            return False
 
     def get_position_size(self, entry_level: int) -> str:
         """Get position size based on entry level"""
@@ -87,20 +105,66 @@ class PositionManager:
         print("⏹️ Position monitoring stopped")
 
     def _monitor_positions(self):
-        """Monitor active positions for price updates"""
+        """Monitor active positions for price updates with improved reliability"""
+        print("📊 Position monitoring started")
+        check_interval = 5  # seconds between checks
+        
         while self.monitoring:
             try:
-                if self.active_positions:
-                    for symbol in list(self.active_positions.keys()):
-                        current_price = self._get_current_price(symbol)
-                        if current_price:
-                            self.update_position_price(symbol, current_price)
-                
-                time.sleep(5)  # Check every 5 seconds
+                if not self.active_positions:
+                    time.sleep(check_interval)
+                    continue
+                    
+                # Process each position
+                for symbol in list(self.active_positions.keys()):
+                    try:
+                        # Only check prices that have been stable for at least check_interval seconds
+                        position = self.active_positions[symbol]
+                        current_time = time.time()
+                        
+                        # Skip if position was checked too recently (avoid spamming API)
+                        if current_time - position.get('last_checked', 0) < check_interval:
+                            continue
+                            
+                        # Get current price with retry
+                        current_price = None
+                        for attempt in range(3):  # Try up to 3 times
+                            try:
+                                current_price = self._get_current_price(symbol)
+                                if current_price and current_price > 0:
+                                    break
+                            except Exception:
+                                time.sleep(1)  # Wait 1 second before retry
+                        
+                        # If we couldn't get a price after retries, skip this position
+                        if not current_price or current_price <= 0:
+                            print(f"⚠️ Couldn't get price for {symbol}, skipping check")
+                            continue
+                        
+                        # Update position and track we checked it
+                        position['last_checked'] = current_time
+                        position['price_checks'] += 1
+                        
+                        # Keep last 10 price checks for debugging
+                        position['price_history'].append({
+                            'time': datetime.now().strftime('%H:%M:%S'),
+                            'price': current_price
+                        })
+                        if len(position['price_history']) > 10:
+                            position['price_history'].pop(0)
+                        
+                        # Process the price update
+                        self.update_position_price(symbol, current_price)
+                        
+                    except Exception as e:
+                        print(f"❌ Error monitoring {symbol}: {e}")
+                        continue
+                        
+                time.sleep(check_interval)
                 
             except Exception as e:
-                print(f"❌ Error monitoring positions: {e}")
-                time.sleep(10)
+                print(f"❌ Monitoring error: {e}")
+                time.sleep(check_interval * 2)  # Wait longer after errors
 
     def _get_current_price(self, symbol: str) -> Optional[float]:
         """Get current price from Binance"""
@@ -122,16 +186,24 @@ class PositionManager:
         position = self.active_positions[symbol]
         position['current_price'] = current_price
         
+        # Store relevant values for easier access
         entry_price = position['entry_price']
         tp1 = position['tp1']
         tp2 = position['tp2']
         stop_loss = position['stop_loss']
         
-        # Calculate current PnL
-        price_change_percent = ((current_price - entry_price) / entry_price) * 100
-        remaining_factor = position['remaining_size'] / 100
-        position['unrealized_pnl'] = price_change_percent * remaining_factor
-        position['pnl_percent'] = position['realized_pnl'] + position['unrealized_pnl']
+        # Calculate current PnL with sanity check
+        if entry_price > 0:
+            price_change_percent = ((current_price - entry_price) / entry_price) * 100
+            remaining_factor = position['remaining_size'] / 100
+            position['unrealized_pnl'] = price_change_percent * remaining_factor
+            position['pnl_percent'] = position['realized_pnl'] + position['unrealized_pnl']
+        
+        # Debug output every 20 checks
+        if position['price_checks'] % 20 == 0:
+            print(f"🔄 Monitoring {symbol}: Price=${current_price:.6f}, " +
+                  f"Entry=${entry_price:.6f}, TP1=${tp1:.6f}, TP2=${tp2:.6f}, " +
+                  f"SL=${stop_loss:.6f}, PnL={position['pnl_percent']:.2f}%")
         
         # Check TP1 (75% exit + move SL to breakeven)
         if not position['tp1_hit'] and current_price >= tp1:
