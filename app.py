@@ -209,7 +209,7 @@ class CryptoSignalBot:
         table.add_column("Core", style="white", width=4)  # Changed from "C" to "Core"
         table.add_column("Vol", style="white", width=5)
         table.add_column("RSI", style="white", width=4)
-        table.add_column("Status", style="white", width=6)
+        table.add_column("Status", style="white", width=9)  # Increased width for more detailed status
         
         display_gainers = self.top_gainers[:35]
         
@@ -226,39 +226,80 @@ class CryptoSignalBot:
                     # Better error handling for volume calculation
                     if hasattr(data, 'volume') and hasattr(data, 'volume_avg') and data.volume_avg > 0:
                         volume_str = f"{data.volume/data.volume_avg:.1f}x"
+                        vol_ok = data.volume/data.volume_avg > 0.8  # Simple volume check
                     else:
                         volume_str = "Wait"  # Change "N/A" to "Wait" for clarity
+                        vol_ok = False
                     
                     # Better error handling for RSI
                     if hasattr(data, 'rsi_5m') and not pd.isna(data.rsi_5m):
                         rsi_str = f"{data.rsi_5m:.0f}"
                     else:
                         rsi_str = "Wait"  # Change "N/A" to "Wait" for clarity
+                    
+                    # Get order book imbalance
+                    imbalance_ratio = self.get_order_book_imbalance(symbol)
+                    order_book_ok = imbalance_ratio is not None and imbalance_ratio >= config.MIN_ORDER_BOOK_IMBALANCE
+                    
+                    # Get reward:risk ratio
+                    market_data = self.get_binance_data(symbol)
+                    if market_data and '5m' in market_data:
+                        atr_levels = self.calculate_atr_levels(market_data, data.price)
+                        reward_risk_ratio = atr_levels.get('reward_risk_ratio', 1.0)
+                        rr_ok = reward_risk_ratio >= 1.2
+                    else:
+                        reward_risk_ratio = 0
+                        rr_ok = False
+                        
+                    # Calculate signal score (simplified version for the table)
+                    score = core_conditions_met * 20  # Base score from core conditions
+                    score_ok = score >= 80
+                    
                 except Exception as e:
                     # Handle any unexpected errors in condition checking
                     self.log_message(f"Error processing {symbol}: {str(e)[:20]}", "error")
                     core_conditions_met = 0
                     volume_str = "Err"  # Error indicator
                     rsi_str = "Err"  # Error indicator
+                    order_book_ok = False
+                    rr_ok = False
+                    score_ok = False
             else:
                 core_conditions_met = 0
                 volume_str = "Scan"  # Clearer indication that scan is pending
                 rsi_str = "Scan"  # Clearer indication that scan is pending
+                order_book_ok = False
+                rr_ok = False
+                score_ok = False
             
             change_style = "green" if gainer['change_24h'] > 0 else "red"
-            conditions_style = "green" if core_conditions_met >= 4 else "yellow" if core_conditions_met >= 3 else "white"
+            conditions_style = "green" if core_conditions_met >= 5 else "yellow" if core_conditions_met >= 4 else "white"
             
+            # Enhanced status display with filter info
             if symbol == f"{self.current_scanning_symbol}USDT":
-                status = "SCAN"
+                status = "SCANNING"
                 status_style = "yellow"
+            elif core_conditions_met == 5:
+                if order_book_ok and rr_ok and score_ok:
+                    status = "✅ SIGNAL"
+                    status_style = "bold green"
+                elif not order_book_ok:
+                    status = "⏳ OB Wait"
+                    status_style = "red"
+                elif not rr_ok:
+                    status = "⏳ RR Wait" 
+                    status_style = "red"
+                else:
+                    status = "⏳ Almost"
+                    status_style = "red"
             elif core_conditions_met >= 4:
-                status = "READY"
-                status_style = "red"
-            elif core_conditions_met >= 3:
-                status = "Near"
+                status = "🔄 Ready"
                 status_style = "yellow"
+            elif core_conditions_met >= 3:
+                status = "👀 Watching"
+                status_style = "cyan"
             else:
-                status = "Watch"
+                status = "Tracking"
                 status_style = "white"
             
             table.add_row(
@@ -308,7 +349,7 @@ class CryptoSignalBot:
         return Panel(table, title=f"Scanning: {self.current_scanning_symbol}", style="blue")
 
     def create_conditions_detail_panel(self) -> Panel:
-        """Updated conditions panel for new 5-condition strategy"""
+        """Updated conditions panel with additional filters display"""
         # Find top 3 coins with most conditions met
         top_coins = []
         
@@ -321,7 +362,31 @@ class CryptoSignalBot:
                 core_conditions_met = sum(conditions[cond] for cond in core_conditions)
                 total_conditions = sum(conditions.values())
                 
-                if core_conditions_met > 0:
+                # Calculate signal score for filtering
+                score = core_conditions_met * 20  # Base score from core conditions
+                
+                # Add bonus points for strong signals
+                if conditions['bb_touch'] and data.price < data.bb_lower * 1.003:  # Very close to BB
+                    score += 10
+                if conditions['stoch_recovery'] and data.stoch_k < 25:  # Very oversold
+                    score += 10
+                if data.rsi_5m < 35:  # Very oversold RSI
+                    score += 10
+                if data.macd_5m > data.macd_signal_5m and data.macd_histogram_5m > 0:  # Strong MACD
+                    score += 10
+                
+                # Get order book imbalance
+                imbalance_ratio = self.get_order_book_imbalance(symbol)
+                
+                # Get reward:risk ratio
+                market_data = self.get_binance_data(symbol)
+                if market_data and '5m' in market_data:
+                    atr_levels = self.calculate_atr_levels(market_data, data.price)
+                    reward_risk_ratio = atr_levels.get('reward_risk_ratio', 1.0)
+                else:
+                    reward_risk_ratio = 0
+                
+                if core_conditions_met >= 3:  # Only include coins with at least 3 core conditions
                     top_coins.append({
                         'coin': gainer['coin'],
                         'symbol': symbol,
@@ -330,11 +395,14 @@ class CryptoSignalBot:
                         'conditions': conditions,
                         'data': data,
                         'price': gainer['price'],
-                        'change': gainer['change_24h']
+                        'change': gainer['change_24h'],
+                        'score': score,
+                        'imbalance_ratio': imbalance_ratio if imbalance_ratio is not None else 0,
+                        'reward_risk_ratio': reward_risk_ratio
                     })
         
-        # Sort by core conditions met, then total conditions
-        top_coins.sort(key=lambda x: (x['core_conditions_met'], x['total_conditions']), reverse=True)
+        # Sort by core conditions met, then signal score
+        top_coins.sort(key=lambda x: (x['core_conditions_met'], x['score']), reverse=True)
         top_3_coins = top_coins[:3]
         
         if not top_3_coins:
@@ -351,11 +419,25 @@ class CryptoSignalBot:
             conditions = coin_info['conditions']
             data = coin_info['data']
             
-            # Create detailed table for this coin
+            # Create detailed table for this coin with signal filters status
+            score_status = "✅" if coin_info['score'] >= 80 else "❌"
+            ob_status = "✅" if coin_info['imbalance_ratio'] >= config.MIN_ORDER_BOOK_IMBALANCE else "❌"
+            rr_status = "✅" if coin_info['reward_risk_ratio'] >= 1.2 else "❌"
+            
+            title_style = "bold green" if (
+                coin_info['core_conditions_met'] == 5 and 
+                coin_info['score'] >= 80 and 
+                coin_info['imbalance_ratio'] >= config.MIN_ORDER_BOOK_IMBALANCE and
+                coin_info['reward_risk_ratio'] >= 1.2
+            ) else "bold yellow" if coin_info['core_conditions_met'] >= 4 else "cyan"
+            
+            # Enhanced title with filter status
+            title = f"{coin_info['coin']} - {coin_info['core_conditions_met']}/5 Core"
+            
             coin_table = Table(
-                title=f"{coin_info['coin']} - {coin_info['core_conditions_met']}/5 Core ({coin_info['total_conditions']}/6 Total)", 
+                title=title, 
                 box=box.SIMPLE, 
-                title_style="bold green" if coin_info['core_conditions_met'] >= 4 else "bold yellow" if coin_info['core_conditions_met'] >= 3 else "cyan"
+                title_style=title_style
             )
             
             coin_table.add_column("Condition", style="white", width=10)
@@ -417,14 +499,29 @@ class CryptoSignalBot:
                 "Aligned"
             )
             
-            # 6. Volume Confirm (BONUS)
-            volume_style = "green" if conditions['volume_confirm'] else "yellow"
-            volume_ratio = data.volume / data.volume_avg
+            # Add separator for signal filters
+            coin_table.add_row("", "", "", "")
+            
+            # Add additional filters section
             coin_table.add_row(
-                "Volume",
-                Text("✓" if conditions['volume_confirm'] else "○", style=volume_style),
-                f"{volume_ratio:.2f}x",
-                "<0.8 or >1.3"
+                "Signal Score",
+                Text(score_status, style="green" if coin_info['score'] >= 80 else "red"),
+                f"{coin_info['score']}/130",
+                "≥ 80"
+            )
+            
+            coin_table.add_row(
+                "Order Book",
+                Text(ob_status, style="green" if coin_info['imbalance_ratio'] >= config.MIN_ORDER_BOOK_IMBALANCE else "red"),
+                f"{coin_info['imbalance_ratio']:.2f}",
+                f"≥ {config.MIN_ORDER_BOOK_IMBALANCE}"
+            )
+            
+            coin_table.add_row(
+                "Reward:Risk",
+                Text(rr_status, style="green" if coin_info['reward_risk_ratio'] >= 1.2 else "red"),
+                f"{coin_info['reward_risk_ratio']:.2f}",
+                "≥ 1.2"
             )
             
             tables.append(coin_table)
@@ -440,7 +537,11 @@ class CryptoSignalBot:
         for table in tables:
             layout.add_row(table)
         
-        return Panel(layout, title="5-Core Strategy (*=Required, 4/5 needed)", style="green" if top_3_coins and top_3_coins[0]['core_conditions_met'] >= 4 else "white")
+        return Panel(
+            layout, 
+            title="Core Conditions + Signal Filters (ALL required)", 
+            style="green" if top_3_coins and top_3_coins[0]['core_conditions_met'] == 5 else "white"
+        )
 
     def create_signals_panel(self) -> Panel:
         """Create recent signals panel with more details"""
